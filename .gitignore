@@ -1,0 +1,11 @@
+Dassl.pytorch/
+*.pyc
+__pycache__/
+venv/
+dist/
+build/
+*.egg-info/
+all_weights/
+test.py
+embeddings/
+.vscode/
