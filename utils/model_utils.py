@@ -21,13 +21,12 @@ def load_clip_to_cpu(cfg):
 
 import torch
 
-def top_k_indices_per_class(zero_shot_emb, idxs, labels, k):
+def top_k_indices_per_class(zero_shot_emb, k):
     """
     Get the indices, confidence values, and pseudo labels of the top k datapoints for each class based on confidence values.
 
     Parameters:
-    a (torch.Tensor): Confidence values tensor of shape (n, c).
-    b (torch.Tensor): Index values for each datapoint of shape (n, 1).
+    zero_shot_emb (dict): Zero-shot embeddings of the data points.
     k (int): Number of top data points to retrieve per class.
 
     Returns:
@@ -37,10 +36,10 @@ def top_k_indices_per_class(zero_shot_emb, idxs, labels, k):
            - confidences (torch.Tensor): Confidence values of top k datapoints for each class.
     """
     # Ensure b is a 1D tensor
-    idxs = idxs.flatten()
+    idxs = zero_shot_emb['idxs'].flatten()
 
     # Compute pseudo labels (argmax of a along the class dimension)
-    pseudo_labels = torch.argmax(zero_shot_emb, dim=1)
+    pseudo_labels = torch.argmax(zero_shot_emb['total_emb'], dim=1)
     
     # Get the top k values and indices for each class
     top_k_values, top_k_indices = torch.topk(zero_shot_emb, k, dim=0, largest=True, sorted=True)
@@ -49,10 +48,12 @@ def top_k_indices_per_class(zero_shot_emb, idxs, labels, k):
     top_k_original_indices = idxs[top_k_indices]
 
     # map the labels
-    top_k_labels = labels[top_k_indices]
+    top_k_labels = zero_shot_emb['labels'][top_k_indices]
     
     # Get the pseudo labels for the top k values using the precomputed pseudo labels
     top_k_pseudo_labels = pseudo_labels[top_k_indices]
+
+
     
     return top_k_original_indices, top_k_labels, top_k_values, top_k_pseudo_labels
 

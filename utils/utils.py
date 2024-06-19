@@ -21,6 +21,20 @@ lafter_datasets = ['DescribableTextures', 'OxfordPets' ,'EuroSAT','AID',
                    'ImageNetSketch', 'Stanford-Cars'
                    'ImageNetA', 'CIFAR10_local', 'CIFAR100_local', 'ImageNet', 'Caltech101']
 
+def setup_train_taal(model):
+    params = list()
+    for key, value in model.named_parameters():
+        if 'taal_enc' in key:
+            value.requires_grad = False
+        else:
+            value.requires_grad = True
+            params.append((key, value))
+    
+    optimizer_grouped_parameters = [
+        {'params': [p for n, p in params if p.requires_grad]}
+    ]
+    optimizer = optim.AdamW(optimizer_grouped_parameters)
+    return optimizer
 
 def setup_text_training_utils(args, model):
     model = model.cuda()
