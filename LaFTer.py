@@ -644,7 +644,8 @@ def main(args):
     dataset_registary.register(Optimal31)
 
     trainer = build_trainer(cfg)
-    trainer.select_top_k()
+    trainer.train_taal(cfg)
+    # trainer.test_taal(cfg)
     # model = trainer.model
     # model.args = args
     # test_loader = trainer.test_loader

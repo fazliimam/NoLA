@@ -5,6 +5,7 @@ import PIL.Image as Image
 from PIL import ImageFilter
 import random
 import os
+import numpy as np
 from clip import clip
 
 def load_clip_to_cpu(cfg):
@@ -42,7 +43,7 @@ def top_k_indices_per_class(zero_shot_emb, k):
     pseudo_labels = torch.argmax(zero_shot_emb['total_emb'], dim=1)
     
     # Get the top k values and indices for each class
-    top_k_values, top_k_indices = torch.topk(zero_shot_emb, k, dim=0, largest=True, sorted=True)
+    top_k_values, top_k_indices = torch.topk(zero_shot_emb['total_emb'], k, dim=0, largest=True, sorted=True)
 
     # Map the top k indices to the original indices using b
     top_k_original_indices = idxs[top_k_indices]
@@ -57,6 +58,62 @@ def top_k_indices_per_class(zero_shot_emb, k):
     
     return top_k_original_indices, top_k_labels, top_k_values, top_k_pseudo_labels
 
+def select_top_k_similarity_per_class(zero_shot_emb, K=1, image_features=None, is_softmax=True):
+    # print(outputs.shape)
+    if is_softmax:
+        outputs = torch.nn.Softmax(dim=1)(zero_shot_emb['total_emb'])
+    else:
+        outputs = zero_shot_emb['total_emb']
+
+    output_m = outputs.cpu().detach().numpy()
+    output_ori = outputs.cpu().detach()
+    output_m_max = output_m.max(axis=1)
+    output_m_max_id = np.argsort(-output_m_max)
+    output_m = output_m[output_m_max_id]
+    img_paths = zero_shot_emb['idxs'][output_m_max_id]
+    output_m_max = output_m_max[output_m_max_id]
+    output_ori = output_ori[output_m_max_id]
+    ids = (-output_m).argsort()[:, 0] # 获得每行的类别标签
+ 
+    if image_features is not None:
+        image_features = image_features.cpu().detach()
+        image_features = image_features[output_m_max_id]
+ 
+    predict_label_dict = {}
+    predict_conf_dict = {}
+    from tqdm import tqdm
+    for id in tqdm(list(set(ids.tolist()))): # 标签去重
+        index = np.where(ids==id)
+        conf_class = output_m_max[index] # 置信度
+        output_class = output_ori[index]
+        img_paths_class = img_paths[index] # 每个类别的路径
+ 
+        if image_features is not None:
+            img_features = image_features[index]
+            if K >= 0:
+                for img_path, img_feature, conf, logit in zip(img_paths_class[:K], img_features[:K], conf_class[:K], output_class):
+                    if '/data/' in img_path:
+                        img_path = './data/' + img_path.split('/data/')[1]
+                    predict_label_dict[img_path] = [id, img_feature, conf, logit]
+            else:
+                for img_path, img_feature, conf, logit in zip(img_paths_class, img_features, conf_class, output_class):
+                    if '/data/' in img_path:
+                        img_path = './data/' + img_path.split('/data/')[1]
+                    predict_label_dict[img_path] = [id, img_feature, conf, logit]
+        else:
+            if K >= 0:
+                for img_path, conf in zip(img_paths_class[:K], conf_class):
+                    if '/data/' in img_path:
+                        img_path = './data/' + img_path.split('/data/')[1]
+                    predict_label_dict[img_path] = id
+                    predict_conf_dict[img_path] = conf
+            else:
+                for img_path, conf in zip(img_paths_class, conf_class):
+                    if '/data/' in img_path:
+                        img_path = './data/' + img_path.split('/data/')[1]
+                    predict_label_dict[img_path] = id
+                    predict_conf_dict[img_path] = conf
+    return predict_label_dict, predict_conf_dict
 
 class TwoCropsTransform:
     """Take two random crops of one image as the query and key."""

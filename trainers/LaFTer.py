@@ -614,20 +614,23 @@ class LaFTer(TrainerX):
     def select_top_k(self, k=16):
         # if file exists, load the embeddings
         if os.path.isfile(f'embeddings/{self.model.dataset_name}_total_emb.pt'):
+            print('******** Loading Already Saved Averaged Text Embeddings *********')
             total_emb = torch.load(f'embeddings/{self.model.dataset_name}_total_emb.pt')
             return top_k_indices_per_class(total_emb, k)
         
-        text_emb = self.gen_emb()
+        
+        text_emb =  torch.load(f'embeddings/{self.model.dataset_name}_avg_text_emb.pt') if os.path.isfile(f'embeddings/{self.model.dataset_name}_avg_text_emb.pt') else self.gen_emb()
         # setup for top_k_selection
         total_emb = []
         idxs = []
         labels = []
         impaths = []
-        train_loader = DataLoader(self.train_loader_x.dataset, batch_size=2048, shuffle=False, num_workers=4)
+        train_loader = DataLoader(self.train_loader_x.dataset, batch_size=16, shuffle=False, num_workers=4)
+        self.model.eval()
         for batch in tqdm(train_loader):
             input = torch.stack(batch['img']).to(self.device)
-            vision_emb = self.model.image_features(input)
-            temp = vision_emb @ text_emb
+            vision_emb = self.model.image_features(input[0])
+            temp = vision_emb @ text_emb.T
             total_emb.append(temp)
             idxs.append(batch['index'])
             impaths.append(batch['impath'])
@@ -637,32 +640,12 @@ class LaFTer(TrainerX):
                 'total_emb': torch.cat(total_emb),
                 'idxs': torch.cat(idxs),
                 'labels':  torch.cat(labels),
-                'impaths': torch.cat(impaths)
+                # 'impaths': torch.cat(impaths)
             }
         
         torch.save(emb_dict, f'embeddings/{self.model.dataset_name}_total_emb.pt')
         
         return top_k_indices_per_class(emb_dict, k)
-
-    def train_adapter(self, cfg):
-        from torch.utils.data import Subset, DataLoader
-        train_idxs, _,_,_ = self.select_top_k(k=16)
-        train_set = Subset(self.train_loader_x.dataset, train_idxs)
-        train_loader = DataLoader(train_set, batch_size=16, shuffle=True, num_workers=4)
-        criterion = nn.CrossEntropyLoss()
-        optimizer = torch.optim.Adam(self.model.taal.parameters(), lr=1e-4)
-        # train the adapter
-        for epoch in range(cfg.epochs):
-            for i, batch in enumerate(train_loader):
-                input, label = self.parse_batch_train(batch)
-                self.model.taal.train()
-                optimizer.zero_grad()
-                output = self.model(input)
-                loss = criterion(output, label)
-                loss.backward()
-                optimizer.step()
-                if i % 10 == 0:
-                    print(f"Epoch: {epoch}, Batch: {i}, Loss: {loss.item()}")
 
     def train_taal(self, cfg):
         # setup train taal
@@ -685,6 +668,22 @@ class LaFTer(TrainerX):
                 optimizer.step()
                 if i % 10 == 0:
                     print(f"Epoch: {epoch}, Batch: {i}, Loss: {loss.item()}")
+
+
+    def test_taal(self,cfg):
+        from torch.utils.data import Subset, DataLoader
+        criterion = nn.CrossEntropyLoss()
+        correct = 0
+        total = 0
+        self.model.taal.eval()
+        with torch.no_grad():
+            for i, batch in enumerate(self.test_loader):
+                input, label = self.parse_batch_train(batch)
+                output = self.model.taal(input)
+                _, predicted = torch.max(output.data, 1)
+                total += label.size(0)
+                correct += (predicted == label).sum().item()
+        print(f'Accuracy of the network on the {total} test images: {100 * correct / total}')
 
 
 
