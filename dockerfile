@@ -1,16 +1,27 @@
 # Use the official miniconda3 base image
-FROM continuumio/miniconda3
+FROM pytorch/pytorch:1.7.1-cuda11.0-cudnn8-runtime
 
-# Copy the environment.yml file into the Docker image
-COPY alp_rs.yml .
+# Set environment variables
+ENV DEBIAN_FRONTEND=noninteractive
 
-# Create the Conda environment inside the Docker image
-RUN conda env create -f alp_rs.yml
+# Install Git
+RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists
 
-# Make sure the environment is activated by default
-# This ensures that the Conda environment is activated for any subsequent RUN commands
-RUN echo "conda activate alp_rs" >> ~/.bashrc
-SHELL ["/bin/bash", "--login", "-c"]
+#  copy the current directory contents into the container at /app
+COPY . /workspace
 
-# Set the default command to run when the container starts
-CMD ["bash"]
+# clone dassl and install requirements
+RUN git clone https://github.com/KaiyangZhou/Dassl.pytorch.git
+
+RUN pip install -r Dassl.pytorch/requirements.txt
+
+RUN cd Dassl.pytorch && pip install -e .
+
+# go to the working directory
+WORKDIR /workspace
+
+
+
+
+
+

@@ -10,9 +10,11 @@ from clip.clip import tokenize
 _tokenizer = _Tokenizer()
 from torchvision.models import resnet50, vit_l_16
 import torchvision.models as models
+from torch.utils.data import Subset, DataLoader
+
 import sys
 # import sys
-sys.path.append("/l/users/sanoojan.baliah/Felix/ALP-RS")
+sys.path.append("../")
 from utils.model_utils import *
 from utils.utils import *
 _tokenizer = _Tokenizer()
@@ -133,16 +135,19 @@ class LaFTerUFT(nn.Module):
         
         self.prompt_dropout = Dropout(0.0)
 
+        self.taal = Taal(num_classes=len(classes), templates=templates, device=device)
+
         self.prompt_embeddings = nn.Parameter(torch.zeros(1, self.num_tokens, self.hidden_size), requires_grad=True)
         val = math.sqrt(6. / float(3 * reduce(mul, patch_size, 1) + prompt_dim))  # noqa
         nn.init.uniform_(self.prompt_embeddings.data, -val, val)
 
-        self.zs_weights = self.gen_zeroshot_weights()   # ZS classifier weights with all templates
+        # self.zs_weights = self.gen_zeroshot_weights()   # ZS classifier weights with all templates
+
+        self.avg_text_emb = self.gen_emb()  # Average text embeddings for each class
         
-        self.txt_features_for_text_cls, self.labels_for_text_cls = self.txt_features_for_text_cls()
+        # self.txt_features_for_text_cls, self.labels_for_text_cls = self.txt_features_for_text_cls()
         self.text_features = self.txt_features()
 
-        self.taal = Taal(num_classes=len(classes), templates=templates, device=device)
 
     def txt_features_for_text_cls(self):
 
@@ -306,7 +311,9 @@ class LaFTerUFT(nn.Module):
             return None, None
         
     def gen_emb(self):
-
+        if os.path.isfile(f'embeddings/{self.dataset_name}_avg_text_emb.pt'):
+            print('******** Loading Already Saved Averaged Text Embeddings *********')
+            return torch.load(f'embeddings/{self.dataset_name}_avg_text_emb.pt').T
         # Map unique string values to numerical indices
         unique_groups, group_indices = torch.unique(self.labels_for_text_cls, return_inverse=True)
 
@@ -503,7 +510,9 @@ class LaFTer(TrainerX):
         self.model = LaFTerUFT(model=clip_model, classes=classnames,
                                           templates=[text_pr], ds_templates = ds_specific_templates[cfg.DATASET.NAME], dataset_name= cfg.DATASET.NAME, txt_cls = cfg.txt_cls, cfg=cfg)
         print("DS Specific Templates: ", ds_specific_templates[cfg.DATASET.NAME])
-        self.register_model("adapt", self.model)
+        self.optim, self.scheduler, self.criterion = setup_train_alp(self.model.taal_adt) 
+
+        self.register_model("adapt", self.model, self.optim, self.scheduler)
         device_count = torch.cuda.device_count()
         if device_count > 1:
             print(f"Multiple GPUs detected (n_gpus={device_count}), use all of them!")
@@ -534,7 +543,7 @@ class LaFTer(TrainerX):
 
     def parse_batch_train(self, batch):
 
-        if isinstance(batch, list):
+        if isinstance(batch['img'], list):
             input = batch["img"]
             input = torch.stack(input)  # two views from dataloader
             input = input.to(self.device)
@@ -580,6 +589,46 @@ class LaFTer(TrainerX):
             # set strict=False
             self._models[name].load_state_dict(state_dict, strict=False)
     
+    def before_train(self):
+
+        # Initialize summary writer
+        writer_dir = osp.join(self.output_dir, "tensorboard")
+        os.makedirs(writer_dir, exist_ok=True)
+        self.init_writer(writer_dir)
+
+        if self.cfg.STAGE == 'train_alp':
+            return
+        
+        # Remember the starting time (for computing the elapsed time)
+        self.time_start = time.time()
+
+        # get top_k dataset
+        top_k_dataset = self.select_top_k(k=16)
+
+        # train taal using top_k dataset
+        train_loader = DataLoader(top_k_dataset, batch_size=16, shuffle=True, num_workers=4)
+
+        self.train_taal(self.cfg, train_loader)
+        self.test_taal(self.cfg)
+
+        # setup train alp
+        self.optimizer, self.sch = setup_train_alp(self.model.adapter)
+
+    def forward_backward(self, batch_x):
+        input_x, label_x = self.parse_batch_train(batch_x)
+
+        out_psuedo = self.model.taal(input_x[0])
+        output_x = self.model.forward_aug_with_prompts(input_x[1])
+
+        # loss_x = self.ce(output_x, label_x)
+        loss_x = self.criterion(output_x, out_psuedo)
+        self.model_backward_and_update(loss_x)
+
+        loss_summary = {
+            "loss_x": loss_x.item(),
+        }
+        return loss_summary
+
     def gen_emb(self):
 
         # Map unique string values to numerical indices
@@ -616,10 +665,12 @@ class LaFTer(TrainerX):
         if os.path.isfile(f'embeddings/{self.model.dataset_name}_total_emb.pt'):
             print('******** Loading Already Saved Averaged Text Embeddings *********')
             total_emb = torch.load(f'embeddings/{self.model.dataset_name}_total_emb.pt')
-            return top_k_indices_per_class(total_emb, k)
+            top_k_idxs, top_k_labels, top_k_conf, top_k_pseudo = top_k_indices_per_class(emb_dict['total_emb'], emb_dict['labels'], k)
+            self.top_k_idxs = top_k_idxs
+            return self.top_k_dataset(top_k_idxs, top_k_labels, top_k_conf, top_k_pseudo)
         
         
-        text_emb =  torch.load(f'embeddings/{self.model.dataset_name}_avg_text_emb.pt') if os.path.isfile(f'embeddings/{self.model.dataset_name}_avg_text_emb.pt') else self.gen_emb()
+        text_emb =  torch.load(f'embeddings/{self.model.dataset_name}_avg_text_emb.pt') if self.model.avg_txt_emb else self.model.gen_emb()
         # setup for top_k_selection
         total_emb = []
         idxs = []
@@ -644,34 +695,44 @@ class LaFTer(TrainerX):
             }
         
         torch.save(emb_dict, f'embeddings/{self.model.dataset_name}_total_emb.pt')
-        
-        return top_k_indices_per_class(emb_dict, k)
+        top_k_idxs, top_k_labels, top_k_conf, top_k_pseudo = top_k_indices_per_class(emb_dict['total_emb'], emb_dict['labels'], k)
+        self.top_k_idxs = top_k_idxs
 
-    def train_taal(self, cfg):
+
+        return self.top_k_dataset(top_k_idxs, top_k_labels, top_k_conf, top_k_pseudo)
+
+    def top_k_dataset(self, top_k_idxs, top_k_labels, top_k_conf, top_k_pseudo):
+        # consturct torch top_k dataset using psuedo label
+        top_k_dataset = []
+        for i in range(len(top_k_idxs)):
+            top_k_dataset.append({'img': self.train_loader_x.dataset[top_k_idxs[i]]['img'], 
+                                  'label': top_k_pseudo[i], 
+                                  'label_conf': top_k_conf[i], 
+                                  'ground_labels': top_k_labels[i]})
+            
+        return torch.utils.data.TensorDataset(top_k_dataset)
+    
+    def train_taal(self, cfg, train_loader):
         # setup train taal
         optimizer = setup_train_taal(self.model.taal)
-        from torch.utils.data import Subset, DataLoader
 
-        train_idxs, _,_,_ = self.select_top_k(k=16)
-        train_set = Subset(self.train_loader_x.dataset, train_idxs)
-        train_loader = DataLoader(train_set, batch_size=16, shuffle=True, num_workers=4)
         criterion = nn.CrossEntropyLoss()
         # train the adapter
+        self.model.taal.train()
         for epoch in range(cfg.epochs):
             for i, batch in enumerate(train_loader):
                 input, label = self.parse_batch_train(batch)
-                self.model.taal.train()
                 optimizer.zero_grad()
                 output = self.model.taal(input)
                 loss = criterion(output, label)
                 loss.backward()
                 optimizer.step()
-                if i % 10 == 0:
-                    print(f"Epoch: {epoch}, Batch: {i}, Loss: {loss.item()}")
-
+                if self._writer:
+                    self._writer.add_scalar("train/loss_taal", loss.item(), epoch * len(train_loader) + i)
+                # if i % 10 == 0:
+                #     print(f"Epoch: {epoch}, Batch: {i}, Loss: {loss.item()}")
 
     def test_taal(self,cfg):
-        from torch.utils.data import Subset, DataLoader
         criterion = nn.CrossEntropyLoss()
         correct = 0
         total = 0
@@ -683,6 +744,8 @@ class LaFTer(TrainerX):
                 _, predicted = torch.max(output.data, 1)
                 total += label.size(0)
                 correct += (predicted == label).sum().item()
+        if self._writer:
+            self._writer.add_scalar("test/accuracy_taal", 100 * correct / total, 0)
         print(f'Accuracy of the network on the {total} test images: {100 * correct / total}')
 
 

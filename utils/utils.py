@@ -36,62 +36,8 @@ def setup_train_taal(model):
     optimizer = optim.AdamW(optimizer_grouped_parameters)
     return optimizer
 
-def setup_text_training_utils(args, model):
-    model = model.cuda()
-    model = model.float()
-    params = list()
-    mile_stones = args.mile_stones
 
-    for key, value in model.named_parameters():
-        if 'adapter' in key and 'adapter_pl' not in key:
-            value.requires_grad = True
-        else:
-            value.requires_grad = False
-
-    if args.train_text_ln:
-        for key, value in model.named_parameters():
-            if 'ln' in key:
-                value.requires_grad=True
-
-    print('------------------ Learnable Parameters ------------------')
-    for key, value in model.named_parameters():
-        if value.requires_grad:
-            print("\t{}, {}, {}".format(key, value.numel(), value.shape))
-            params.append((key, value))
-    print('----------------------------------------------------------')
-
-    no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
-
-    optimizer_grouped_parameters = [
-        {'params': [p for n, p in params
-                    if not any(nd in n for nd in no_decay)],
-         'weight_decay': 0.01},
-        {'params': [p for n, p in params
-                    if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
-    ]
-
-    optimizer = optim.AdamW(optimizer_grouped_parameters, lr=args.lr, betas=(0.9, 0.999))
-
-    if args.scheduler == 'coslr':
-        scheduler = CosineLRScheduler(optimizer,
-                                      t_initial=args.epochs,
-                                      lr_min=1e-6,
-                                      warmup_lr_init=1e-4,
-                                      warmup_t=5,
-                                      cycle_limit=1,
-                                      t_in_epochs=True)
-    elif args.scheduler == 'multistep':
-        scheduler = optim.lr_scheduler.MultiStepLR(optimizer, mile_stones, 0.1)
-    elif args.scheduler == 'cosine':
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer, float(args.epochs))
-    else:
-        raise NotImplementedError
-
-    criteria = LabelSmoothingCrossEntropy()
-    return optimizer, scheduler, criteria
-
-def setup_lafter_training_utils(args, model):
+def setup_train_alp(args, model):
     model = model.cuda()
     model = model.float()
     params = list()
@@ -99,21 +45,10 @@ def setup_lafter_training_utils(args, model):
     for key, value in model.named_parameters():
         if key == 'prompt_embeddings':
             value.requires_grad = True
-        elif 'adapter' in key and 'adapter_pl' not in key:
-            value.requires_grad = True
-        elif 'projector' in key and not args.entropy:
-            value.requires_grad = True
         elif 'ln' in key:
             value.requires_grad = True
         else:
             value.requires_grad = False
-
-    for key, value in model.named_parameters():
-        if 'visual' in key:
-            if 'ln' in key or 'bn' in key:
-                value.requires_grad = True
-            else:
-                value.requires_grad = False
 
     print('------------------ Learnable Parameters ------------------')
     for key, value in model.named_parameters():
