@@ -105,7 +105,7 @@ class MLRSNet(DatasetBase):
         dataset_new = []
         for item_old in dataset_old:
             cname_old = item_old.classname
-            cname_new = NEW_CLASSNAMES[cname_old]
+            cname_new = NEW_CNAMES[cname_old]
             item_new = Datum(impath=item_old.impath, label=item_old.label, classname=cname_new)
             dataset_new.append(item_new)
         return dataset_new

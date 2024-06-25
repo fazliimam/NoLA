@@ -37,11 +37,10 @@ def setup_train_taal(model):
     return optimizer
 
 
-def setup_train_alp(args, model):
+def setup_train_alp(model):
     model = model.cuda()
     model = model.float()
     params = list()
-    args.entropy = True
     for key, value in model.named_parameters():
         if key == 'prompt_embeddings':
             value.requires_grad = True
@@ -68,10 +67,8 @@ def setup_train_alp(args, model):
 
     optimizer = optim.AdamW(optimizer_grouped_parameters, lr=args.lr, betas=(0.9, 0.999))
     scheduler = optim.lr_scheduler.MultiStepLR(optimizer, args.mile_stones, 0.60)
-    if args.loss_fn=="crossentropy":
-        criteria = LabelSmoothingCrossEntropy()
-    elif args.loss_fn=="distill":
-        criteria = DistillationLoss()
+    criteria = LabelSmoothingCrossEntropy()
+    
     return optimizer, scheduler, criteria
 
 def test_prompting(teloader, model,model_path=None):

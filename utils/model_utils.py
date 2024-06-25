@@ -47,16 +47,13 @@ def top_k_indices_per_class(zero_shot_emb, k):
 
     # Map the top k indices to the original indices using b
     top_k_original_indices = idxs[top_k_indices]
-
-    # map the labels
-    top_k_labels = zero_shot_emb['labels'][top_k_indices]
     
     # Get the pseudo labels for the top k values using the precomputed pseudo labels
     top_k_pseudo_labels = pseudo_labels[top_k_indices]
 
 
     
-    return top_k_original_indices, top_k_labels, top_k_values, top_k_pseudo_labels
+    return top_k_original_indices, top_k_values, top_k_pseudo_labels
 
 def select_top_k_similarity_per_class(zero_shot_emb, K=1, image_features=None, is_softmax=True):
     # print(outputs.shape)

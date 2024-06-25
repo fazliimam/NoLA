@@ -1,3 +1,6 @@
 MODEL:
   BACKBONE:
     NAME: "RemoteCLIP"
+
+TRAINER:
+  NAME: 'ALP'

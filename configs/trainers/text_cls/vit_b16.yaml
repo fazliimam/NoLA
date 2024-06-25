@@ -1,3 +1,5 @@
 MODEL:
   BACKBONE:
     NAME: "ViT-B/16"
+TRAINER:
+  NAME: 'ALP'

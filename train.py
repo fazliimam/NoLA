@@ -7,6 +7,7 @@ from dassl.utils import setup_logger, set_random_seed, collect_env_info
 from dassl.config import get_cfg_default
 from dassl.engine import build_trainer
 from utils.utils import *
+from utils.misc import setup_cfg, lossmeter
 # custom
 import datasets.oxford_flowers
 import datasets.fgvc_aircraft
@@ -22,7 +23,7 @@ import datasets.imagenet_s
 import datasets.imagenet_a
 import datasets.caltech101
 import datasets.cifar
-import trainers.LaFTer as lafter_uft
+import trainers.alp as alp
 from utils.utils import *
 import os
 from dassl.utils import Registry
@@ -34,21 +35,7 @@ from datasets import AID
 from datasets import PatternNet
 from datasets import WHURS19
 
-def print_args(args, cfg):
-    print("***************")
-    print("** Arguments **")
-    print("***************")
-    optkeys = list(args.__dict__.keys())
-    optkeys.sort()
-    for key in optkeys:
-        print("{}: {}".format(key, args.__dict__[key]))
-    print("************")
-    print("** Config **")
-    print("************")
-    print(cfg)
-
-def start_seed():
-    seed = args.seed
+def setup_seed(seed):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -56,7 +43,6 @@ def start_seed():
     torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
-
 
 def test(args, teloader, model):
     model.eval()
@@ -91,58 +77,8 @@ def test(args, teloader, model):
     else:
         return top1_pl.avg * 100
 
-
-def train_txt_cls(args, model):
-    optimizer, _, _ = setup_text_training_utils(args, model)
-    criteria = torch.nn.CrossEntropyLoss(label_smoothing=0.1)
-
-    for i in tqdm(range(args.txt_epochs)):
-        loss = model.train_txt_clas(criteria)
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-    model.txt_cls_init()
-
 def train_lafter(args, model, tr_loader, val_loader, test_loader=None):
 
-
-    if args.text_only:
-        # first train text classifier
-        train_txt_cls(args, model)
-    else:
-        #Loading zs weights to text classifier i.e skipping text classifier training
-        model.adapter[0].weight.data=model.zs_weights
-        # model.txt_cls_init()
-        model.zs_cls_embs_init()
-
-    all_acc = list()
-    optimizer, scheduler, criteria = setup_lafter_training_utils(args, model)
-
-    if args.ve_unshared:
-        print("making ve unshared----------------")
-        for param in model.image_features_frozen.parameters(): 
-            param.requires_grad = False
-
-    if args.pl_technique=="pl_svl" or args.pl_technique=="pl_text_svl"  or args.pl_technique=="svl_only" or args.pl_technique=="vision_adapter":
-        #  initialize the svl adapter
-        model.svl_adapter_init(args=args)
-    elif args.pl_technique=="dino_adapter":
-        model.dino_adapter_init(args=args)
-
-    elif args.pl_technique=="scalemae":
-        model.scalemae_init(args=args)
-
-    elif args.pl_technique=="satmae":
-        model.satmae_init(args=args)
-
-    elif args.pl_technique=="clip_adapter":
-        model.clip_adapter_init(args=args)
-    
-    if args.ln_frozen:
-        print("------LN Frozen------")
-        #Freeze CLIP
-        for param in model.model.parameters():
-            param.requires_grad = False
     
     # # Print learnable parameters
     # print('<<<<<<<<<<<<<<<<<<<<<<Learnable Parameters>>>>>>>>>>>>>>>>>>>>>>>>>>>>>')
@@ -485,8 +421,8 @@ def train_lafter(args, model, tr_loader, val_loader, test_loader=None):
     print(f'-------------------------------- Best Validation Accuracy Epoch: {all_acc.index(max(all_acc))} --------------------------------')
     
 def main(args):
-    start_seed()
-    cfg = setup_cfg(args)
+
+    setup_seed(cfg.SEED)
     cfg.DATALOADER.TRAIN_X.BATCH_SIZE = args.batch_size
     cfg.DATALOADER.TEST.BATCH_SIZE = args.batch_size
     cfg.SEED = args.seed
@@ -499,10 +435,7 @@ def main(args):
         print("Setting fixed seed: {}".format(cfg.SEED))
         set_random_seed(cfg.SEED)
     setup_logger(cfg.OUTPUT_DIR)
-    # print("BWS----------",args.bws)
-    # print("PL_TECHNIQUE----------",args.pl_technique)
-    # print("DATASET----------",args.dataset)
-    print_args(args, cfg)
+
     if torch.cuda.is_available() and cfg.USE_CUDA:
         torch.backends.cudnn.benchmark = True
     
@@ -515,69 +448,13 @@ def main(args):
     dataset_registary.register(Optimal31)
 
     trainer = build_trainer(cfg)
-    trainer.train_taal(cfg)
-    # trainer.test_taal(cfg)
-    # model = trainer.model
-    # model.args = args
-    # test_loader = trainer.test_loader
-    # val_loader = trainer.val_loader
-    # train_loader = trainer.train_loader_x
+    trainer.train(cfg)
+    trainer.test(cfg)
 
-    # if args.zero_shot:
-    #     breakpoint()
-    #     # zero_shot(model, test_loader)
-    #     zero_shot(model, train_loader)
-    #     # acc = test_prompting(test_loader, model, model_path="/home/mohamed.imam/Thesis/RS_zero_shot/output/LaFTer/vit_b32/resisc45/model_best.pth")
-    #     # print(f'final accuracy:{acc}')
-    # elif args.test_only:
-    #     acc = test_prompting(test_loader, model, model_path="Results/dino/aid_RP_128_None/model_best.pth")
-    #     print(f'Test accuracy (loading saved model):{acc}')
-    # elif args.save_emb:
-    #     if args.dataset=="eurosat":
-    #         model_path = "Results/Ours/MAIN_dino-ssl_clipb32/eurosat_RP_128_None/model_best.pth"
-    #     elif args.dataset=="ucm":
-    #         model_path = "Results/Ours/MAIN_dino-ssl_clipb32/ucm_RP_128_None/model_best.pth"
-    #     elif args.dataset=="patternnet":
-    #         model_path = "Results/Ours/MAIN_dino-ssl_clipb32/patternnet_RP_128_None/model_best.pth"
-    #     elif args.dataset=="resisc45":
-    #         model_path = "Results/Ours/MAIN_dino-ssl_clipb32/resisc45_RP_128_None/model_best.pth"
-    #     else:
-    #         raise NotImplementedError
-    #     breakpoint()
-    #     save_emb(train_loader, model, model_path=model_path)
-    #     print(f'Embeddings saved')
-    # else:
-    #     train_lafter(args, model,train_loader, val_loader, test_loader=test_loader)
-    #     test_acc = test_prompting(test_loader, model, model_path=os.path.join(args.output_dir,"model_best.pth"))
-    #     print(f'Test accuracy (loading saved model):{test_acc}')
-    #     # val_acc = test_prompting(val_loader, model, model_path=os.path.join(args.output_dir,"model_best.pth"))
-    #     # print(f'Val accuracy (loading saved model):{val_acc}')
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=str, default="", help="path to dataset")
-    parser.add_argument("--output-dir", type=str, default="", help="output directory")
-    parser.add_argument(
-        "--resume",
-        type=str,
-        default="",
-        help="checkpoint directory (from which the training resumes)",
-    )
-    parser.add_argument(
-        "--seed", type=int, default=7777, help="only positive value enables a fixed seed"
-    )
-    parser.add_argument(
-        "--print_freq", type=int, default=10, help="only positive value enables a fixed seed"
-    )
-    parser.add_argument(
-        "--source-domains", type=str, nargs="+", help="source domains for DA/DG"
-    )
-    parser.add_argument(
-        "--target-domains", type=str, nargs="+", help="target domains for DA/DG"
-    )
-    parser.add_argument(
-        "--transforms", type=str, nargs="+", help="data augmentation methods"
-    )
     parser.add_argument(
         "--config-file", type=str, default="", help="path to config file"
     )
@@ -586,22 +463,6 @@ if __name__ == "__main__":
         type=str,
         default="",
         help="path to config file for dataset setup",
-    )
-    parser.add_argument("--trainer", type=str, default="LaFTer", help="name of trainer")
-    parser.add_argument("--backbone", type=str, default="", help="name of CNN backbone")
-    parser.add_argument("--head", type=str, default="", help="name of head")
-    parser.add_argument("--eval-only", action="store_true", help="evaluation only")
-    parser.add_argument(
-        "--model-dir",
-        type=str,
-        default="",
-        help="load model from this directory for eval-only mode",
-    )
-    parser.add_argument(
-        "--load-epoch", type=int, help="load model weights at this epoch for evaluation"
-    )
-    parser.add_argument(
-        "--no-train", action="store_true", help="do not call trainer.train()"
     )
     parser.add_argument(
         "opts",
@@ -663,17 +524,7 @@ if __name__ == "__main__":
         args.batch_size=512
         args.lr=0.004
 
-    args.mile_stones = None
+    cfg = setup_cfg(args)
 
-    # if args.wandb_project_name:
-    #     wandb.init(
-    #         # set the wandb project where this run will be logged
-    #         project=args.wandb_project_name,
-    #         name= args.wandb_run_name,
-            
-    #         # track hyperparameters and run metadata
-    #         config=args
-    #     )
-    
     main(args)
 

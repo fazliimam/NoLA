@@ -5,7 +5,7 @@ from clip.clip import tokenize
 import json
 import os
 from clip import clip
-from trainers.LaFTer import *
+from trainers.alp import *
 
 print("Life is good")
 
