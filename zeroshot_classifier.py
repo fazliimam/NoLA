@@ -361,7 +361,7 @@ def init_classifier_weights(classnames, dataset):
     clip_model.float()
     text_pr = "a satellite photo of {}"
 
-    model = LaFTerUFT(model=clip_model, classes=classnames, 
+    model = ALP(model=clip_model, classes=classnames, 
                            templates=[text_pr], ds_templates=ds_specific_templates[dataset], 
                            dataset_name=dataset, txt_cls='lafter')
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
