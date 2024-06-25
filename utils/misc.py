@@ -3,36 +3,6 @@ from dassl.config import get_cfg_default
 from yacs.config import CfgNode as CN
 import torch
 
-def reset_cfg(cfg, args):
-    if args.root:
-        cfg.DATASET.ROOT = args.root
-
-    if args.output_dir:
-        cfg.OUTPUT_DIR = args.output_dir
-
-    if args.resume:
-        cfg.RESUME = args.resume
-
-    if args.seed:
-        cfg.SEED = args.seed
-
-    if args.source_domains:
-        cfg.DATASET.SOURCE_DOMAINS = args.source_domains
-
-    if args.target_domains:
-        cfg.DATASET.TARGET_DOMAINS = args.target_domains
-
-    if args.transforms:
-        cfg.INPUT.TRANSFORMS = args.transforms
-
-    if args.trainer:
-        cfg.TRAINER.NAME = args.trainer
-
-    if args.backbone:
-        cfg.MODEL.BACKBONE.NAME = args.backbone
-
-    if args.head:
-        cfg.MODEL.HEAD.NAME = args.head
 
 def extend_cfg(cfg):
 
