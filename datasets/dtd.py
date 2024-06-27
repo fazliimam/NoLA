@@ -64,7 +64,6 @@ class DescribableTextures(DatasetBase):
         categories.sort()
 
         p_tst = 1 - p_trn - p_val
-        breakpoint()
         print(f"Splitting into {p_trn:.0%} train, {p_val:.0%} val, and {p_tst:.0%} test")
 
         def _collate(ims, y, c):

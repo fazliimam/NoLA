@@ -1,4 +1,3 @@
-from dassl.utils import seed_utils
 from dassl.config import get_cfg_default
 from yacs.config import CfgNode as CN
 import torch
@@ -21,6 +20,9 @@ def extend_cfg(cfg):
     cfg.DATASET.SUBSAMPLE_CLASSES = "all"  # all, base or new
 
     cfg.txt_cls = 'lafter'
+    cfg.DEVICE = 'cuda'
+    cfg.NUM_TOKENS = 16 # number of  learnable tokens
+    cfg.TAAL_EPOCHS = 5
 
 def setup_cfg(args):
     

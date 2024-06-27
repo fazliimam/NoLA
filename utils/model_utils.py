@@ -37,7 +37,7 @@ def top_k_indices_per_class(zero_shot_emb, k):
            - confidences (torch.Tensor): Confidence values of top k datapoints for each class.
     """
     # Ensure b is a 1D tensor
-    idxs = zero_shot_emb['idxs'].flatten()
+    idxs = zero_shot_emb['idxs'].flatten().to(zero_shot_emb['total_emb'].device)
 
     # Compute pseudo labels (argmax of a along the class dimension)
     pseudo_labels = torch.argmax(zero_shot_emb['total_emb'], dim=1)
@@ -53,7 +53,7 @@ def top_k_indices_per_class(zero_shot_emb, k):
 
 
     
-    return top_k_original_indices, top_k_values, top_k_pseudo_labels
+    return top_k_original_indices.flatten(), top_k_values.flatten(), top_k_pseudo_labels.flatten()
 
 def select_top_k_similarity_per_class(zero_shot_emb, K=1, image_features=None, is_softmax=True):
     # print(outputs.shape)

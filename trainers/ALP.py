@@ -20,6 +20,8 @@ from functools import reduce
 from operator import mul
 from utils.data_utils import ds_specific_templates
 
+
+
 def load_clip_to_cpu(backbone_name):
     url = clip._MODELS[backbone_name]
     model_path = clip._download(url, root='all_weights')
@@ -39,47 +41,11 @@ def load_clip_to_cpu(backbone_name):
     
     return model
 
-def weights_init(m):
-    if isinstance(m, nn.Linear):
-        nn.init.xavier_uniform_(m.weight.data)
-        if m.bias is not None:
-            nn.init.zeros_(m.bias.data)
 
-def process_json_files(imagenet_file, dataset_file, output_file, dataset, desc_noise):
-    with open(imagenet_file, 'r') as file:
-        original_data = json.load(file)
-
-    new_data = {"other": [value for values in original_data.values() for value in values]}
-
-    if dataset=="EuroSAT":
-        samples=int(250*desc_noise)
-    elif dataset=="Resisc45":
-        samples=int(45*50*desc_noise)
-    elif dataset=="AID":
-        samples=int(30*50*desc_noise)
-    elif dataset=="PatternNet":
-        samples=int(38*50*desc_noise)
-    else:
-        # Input samples for other datasets
-        samples=int(input("Enter the number of noise samples for the other datasets: "))
-    print("Number of noise samples: ", samples)
-
-    sampled_values = random.sample(new_data['other'], samples)
-    sampled_data = {"other": sampled_values}
-
-    with open(dataset_file, 'r') as file:
-        dataset_data = json.load(file)
-
-    #combine the two dictionaries
-    dataset_data.update(sampled_data)
-        
-    # Save the updated dataset_data to the output file
-    with open(output_file, 'w') as file:
-        json.dump(dataset_data, file, indent=4)
 
 class TopKDataset(Dataset):
-    def __init__(self, dataset, top_k_idxs, top_k_conf, top_k_pseudo):
-        self.dataset = dataset
+    def __init__(self, data, top_k_idxs, top_k_conf, top_k_pseudo):
+        self.data = data
         self.top_k_idxs = top_k_idxs
         self.top_k_conf = top_k_conf
         self.top_k_pseudo = top_k_pseudo
@@ -90,11 +56,20 @@ class TopKDataset(Dataset):
     def __getitem__(self, idx):
         new_idx = self.top_k_idxs[idx]
         return {
-            'img': self.dataset[new_idx]['img'],
-            'label': self.top_k_pseudo[idx],
-            'label_conf': self.top_k_conf[idx],
-            'ground_labels': self.dataset[new_idx]['label']
+            'img': self.data[new_idx]['img'],
+            'label': torch.tensor(self.top_k_pseudo[idx], dtype=torch.long),
+            'label_conf': torch.tensor(self.top_k_conf[idx], dtype=torch.float32),
+            'ground_labels': torch.tensor(self.data[new_idx]['label'], dtype=torch.long),
         }
+    
+class TopKDataset1(Dataset):
+    def __init__(self, data_list):
+        self.data_list = data_list
+    def __len__(self):
+        return len(self.data_list)
+
+    def __getitem__(self, idx):
+        return self.data_list[idx]
     
 class Taal(nn.Module):
     def __init__(self, num_classes, templates, device='cuda'):
@@ -127,27 +102,29 @@ class AdapterMLP(nn.Module):
       
 class ALP_RS(nn.Module):
 
-    def __init__(self, clip_model, classes, templates, ds_templates=None, device='cpu', dataset_name=None, txt_cls=None, cfg=None):
-        super(ALP, self).__init__()
+    def __init__(self, clip_model, classes, templates, ds_templates=None, cfg=None):
+        super(ALP_RS, self).__init__()
 
-        self.device = device
+        self.device = cfg.DEVICE
         self.cfg = cfg
         self.dataset_templates = ds_templates
         self.classes = classes
-        self.dataset_name = dataset_name
-        self.txt_cls = txt_cls
+        self.dataset_name = cfg.DATASET.NAME
+        self.txt_cls = cfg.txt_cls
         self.templates = templates
+
         self.backbone_out_size = 512 # todo for ViT-L use 768 - for ViT-B use 512
         self.hidden_size = 768 # todo for ViT-L use 1024 - for ViT-B use 768
-        self.num_tokens = 16 # todo all experiments are run with num_tokens = 50
+        self.num_tokens = cfg.NUM_TOKENS # todo all experiments are run with num_tokens = 50
+        
         self.prompt_proj = nn.Identity()
         prompt_dim = self.hidden_size
         
         self.prompt_dropout = Dropout(0.0)
-        self.clip_model = clip_model.to(device)
-        self.taal = Taal(num_classes=len(classes), templates=templates, device=device)
+        self.clip_model = clip_model.to(cfg.DEVICE)
+        self.taal = Taal(num_classes=len(classes), templates=templates, device=cfg.DEVICE).to(self.device)
 
-        self.prompt_embeddings = nn.Parameter(torch.zeros(1, self.num_tokens, self.hidden_size), requires_grad=True)
+        self.prompt_embeddings = nn.Parameter(torch.zeros(1, self.num_tokens, self.hidden_size), requires_grad=True).to(self.device)
         patch_size = (16, 16)
         val = math.sqrt(6. / float(3 * reduce(mul, patch_size, 1) + prompt_dim))  # noqa
         nn.init.uniform_(self.prompt_embeddings.data, -val, val)
@@ -172,23 +149,9 @@ class ALP_RS(nn.Module):
             if self.dataset_name not in lafter_datasets:
                 raise ValueError('Invalid dataset name for LaFTer')
             
-            # process_json_files('./descriptions/generic/ImageNet.json', f'./descriptions/generic/{self.dataset_name}.json', f'./descriptions/generic/{self.dataset_name}_noised.json', self.dataset_name)
 
-            if self.cfg.desc_noise>0:
-                process_json_files('./descriptions/generic/ImageNet.json', f'./descriptions/generic/{self.dataset_name}.json', f'./descriptions/generic/{self.dataset_name}_noised.json', self.dataset_name, self.cfg.desc_noise)
-                path_to_file = f'./descriptions/generic/{self.dataset_name}_noised.json'
-            elif self.cfg.k_desc>0:
-                nos = self.cfg.k_desc
-                print(f'******** Using K Descriptions: {nos} *********')
-                path_to_file = f'./descriptions/k_descriptions/k_desc/{self.dataset_name}_{nos}.json'
-                print(path_to_file)
-            else:
-                print('******** No Noise Added *********')
-                path_to_file = f'./descriptions/generic/{self.dataset_name}.json'
-                # path_to_file = f'/l/users/sanoojan.baliah/Felix/dataset_prep/descriptions/{self.dataset_name}_25_promptless_refined.json'
-                print(path_to_file)
-
-
+            path_to_file = f'./descriptions/generic/{self.dataset_name}.json'
+            
             with open(path_to_file) as f:
                 gpt3_prompts = json.load(f)
             desc, labels_for_descriptions = gen_labels_with_descrptions(self.classes, descriptions=gpt3_prompts)
@@ -312,7 +275,7 @@ class ALP_RS(nn.Module):
         '''
         img_features_2 = self.incorporate_prompt(x2)
         img_features_2 = self.embeddings_after_prompts(img_features_2)
-        zs_emb = self.avg_text_emb @ img_features_2
+        zs_emb = self.avg_text_emb.T @ img_features_2.T
         return zs_emb
 
     def forward_taal(self,x):
@@ -354,9 +317,19 @@ class ALP(TrainerX):
         assert cfg.TRAINER.COOP.PREC in ["fp16", "fp32", "amp"]
 
     def setup_optim(self):
+        params = []
+        for k, v in self.model.clip_model.named_parameters():
+            if 'ln' in k:
+                v.requires_grad = True
+                params.append((k,v))
+            else:
+                v.requires_grad = False
+
         
+
         no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
-        params = self.model.clip_model.parameter()
+
+              
         optimizer_grouped_parameters = [
             {'params': [p for n, p in params
                         if not any(nd in n for nd in no_decay)],
@@ -364,7 +337,7 @@ class ALP(TrainerX):
             {'params': [p for n, p in params
                         if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
         ]
-        optimizer = optim.AdamW(optimizer_grouped_parameters, lr=self.OPTIM.LR, betas=(0.9, 0.999))
+        optimizer = optim.AdamW(optimizer_grouped_parameters, lr=self.cfg.OPTIM.LR, betas=(0.9, 0.999))
         scheduler = optim.lr_scheduler.MultiStepLR(optimizer, None, 0.60)
         criteria = LabelSmoothingCrossEntropy()
 
@@ -389,20 +362,11 @@ class ALP(TrainerX):
         text_pr = 'a photo of a {}'
         # text_pr = "a satellite photo of {}"
         print(f"Using prompt: {text_pr}")
-        self.model = ALP_RS(model=clip_model, classes=classnames,
-                                          templates=[text_pr], ds_templates = ds_specific_templates[cfg.DATASET.NAME], dataset_name= cfg.DATASET.NAME, txt_cls = cfg.txt_cls, cfg=cfg)
+        self.model = ALP_RS(clip_model=clip_model, classes=classnames,
+                                          templates=[text_pr], ds_templates = ds_specific_templates[cfg.DATASET.NAME], cfg=cfg)
 
         self.optim, self.scheduler, self.criterion = self.setup_optim() 
         self.register_model("adapt", self.model, self.optim, self.scheduler)
-
-        device_count = torch.cuda.device_count()
-        if device_count > 1:
-            print(f"Multiple GPUs detected (n_gpus={device_count}), use all of them!")
-            self.model = nn.DataParallel(self.model)
-
-        #  freeze clip
-        for param in self.model.clip_model.parameters():
-            param.requires_grad = False
 
     def build_data_loader(self):
         """Create essential data-related attributes.
@@ -478,8 +442,8 @@ class ALP(TrainerX):
         os.makedirs(writer_dir, exist_ok=True)
         self.init_writer(writer_dir)
 
-        if self.cfg.STAGE == 'train_alp':
-            return
+        # if self.cfg.STAGE == 'train_alp':
+        #     return
         
         # Remember the starting time (for computing the elapsed time)
         self.time_start = time.time()
@@ -488,13 +452,12 @@ class ALP(TrainerX):
         top_k_dataset = self.select_top_k(k=16)
 
         # train taal using top_k dataset
-        train_loader = DataLoader(top_k_dataset, batch_size=16, shuffle=True, num_workers=4)
+        train_loader = DataLoader(top_k_dataset, batch_size=8192, shuffle=True, num_workers=4)
 
         self.train_taal(self.cfg, train_loader)
         self.test_taal(self.cfg)
 
-        # setup train alp
-        # self.optimizer, self.sch = setup_train_alp(self.model.adapter)
+        self.model = setup_train_alp(self.model)
 
     def forward_backward(self, batch_x):
 
@@ -502,8 +465,8 @@ class ALP(TrainerX):
 
         out_psuedo = self.model.taal(input_x[0])
         output_x = self.model.forward_aug_with_prompts(input_x[1].float())
-
         loss_x = self.criterion(output_x.squeeze(), out_psuedo)
+
         self.model_backward_and_update(loss_x)
 
         loss_summary = {
@@ -511,16 +474,41 @@ class ALP(TrainerX):
         }
         return loss_summary
 
+    def build_topk_dataset(self, top_k_idxs, top_k_conf, top_k_pseudo):
+        data = []
+        for idx, conf, pseudo in zip(top_k_idxs, top_k_conf, top_k_pseudo):
+            data.append({
+                'img': self.train_loader_x.dataset[idx]['img'],
+                'label': pseudo,
+                'label_conf': conf,
+                'ground_labels': self.train_loader_x.dataset[idx]['label'],
+            })
+        
+        return TopKDataset1(data)
+
     def select_top_k(self, k=16):
         # if file exists, load the embeddings
-        if os.path.isfile(f'embeddings/{self.model.dataset_name}_total_emb.pt'):
+        if os.path.isfile(f'embeddings/{self.cfg.DATASET.NAME}_total_emb.pt'):
             print('******** Loading Already Saved Averaged Text Embeddings *********')
-            total_emb = torch.load(f'embeddings/{self.model.dataset_name}_total_emb.pt')
-            top_k_idxs, top_k_conf, top_k_pseudo = top_k_indices_per_class(emb_dict['total_emb'], emb_dict['labels'], k)
+            total_emb = torch.load(f'embeddings/{self.cfg.DATASET.NAME}_total_emb.pt')
+            top_k_idxs, top_k_conf, top_k_pseudo = top_k_indices_per_class(total_emb, k)
             self.top_k_idxs = top_k_idxs
-            return TopKDataset(self.train_loader_x.dataset, top_k_idxs, top_k_conf, top_k_pseudo)
+
+            # return TopKDataset(self.train_loader_x.dataset, top_k_idxs.cpu().numpy(), top_k_conf.cpu().numpy(), top_k_pseudo.cpu().numpy())
+            return self.build_topk_dataset(top_k_idxs.cpu().numpy(), top_k_conf.cpu().numpy(), top_k_pseudo.cpu().numpy())
         
-        text_emb =  torch.load(f'embeddings/{self.model.dataset_name}_avg_text_emb.pt') if self.model.avg_txt_emb else self.model.gen_emb()
+        # file_path = f'embeddings/{self.cfg.DATASET.NAME}_avg_text_emb.pt'
+
+        text_emb =  self.model.avg_text_emb
+
+        # Check if the file exists
+        # if os.path.exists(file_path):
+        #     # Load the embeddings from the file if it exists
+        #     text_emb = torch.load(file_path)
+        # else:
+        #     # Generate the embeddings using the model's method if the file does not exist
+        #     text_emb = self.model.gen_emb()
+            
         # setup for top_k_selection
         total_emb = []
         idxs = []
@@ -531,7 +519,7 @@ class ALP(TrainerX):
         for batch in tqdm(train_loader):
             input = torch.stack(batch['img']).to(self.device)
             vision_emb = self.model.image_features(input[0])
-            temp = vision_emb @ text_emb.T
+            temp = vision_emb @ text_emb
             total_emb.append(temp)
             idxs.append(batch['index'])
             impaths.append(batch['impath'])
@@ -543,11 +531,12 @@ class ALP(TrainerX):
                 'labels':  torch.cat(labels),
             }
         
-        torch.save(emb_dict, f'embeddings/{self.model.dataset_name}_total_emb.pt')
-        top_k_idxs, top_k_conf, top_k_pseudo = top_k_indices_per_class(emb_dict['total_emb'], emb_dict['labels'], k)
+        torch.save(emb_dict, f'embeddings/{self.cfg.DATASET.NAME}_total_emb.pt')
+        top_k_idxs, top_k_conf, top_k_pseudo = top_k_indices_per_class(emb_dict, k)
         self.top_k_idxs = top_k_idxs
 
-        return TopKDataset(self.train_loader_x.dataset, top_k_idxs, top_k_conf, top_k_pseudo)
+        # return TopKDataset(self.train_loader_x.dataset, top_k_idxs, top_k_conf, top_k_pseudo)
+        return self.build_topk_dataset(top_k_idxs.cpu().numpy(), top_k_conf.cpu().numpy(), top_k_pseudo.cpu().numpy())
     
     def train_taal(self, cfg, train_loader):
         # setup train taal
@@ -556,11 +545,11 @@ class ALP(TrainerX):
         criterion = nn.CrossEntropyLoss()
         # train the adapter
         self.model.taal.train()
-        for epoch in range(cfg.epochs):
+        for epoch in tqdm(range(cfg.TAAL_EPOCHS)):
             for i, batch in enumerate(train_loader):
                 input, label = self.parse_batch_train(batch)
                 optimizer.zero_grad()
-                output = self.model.taal(input)
+                output = self.model.taal(input[0])
                 loss = criterion(output, label)
                 loss.backward()
                 optimizer.step()
@@ -569,7 +558,7 @@ class ALP(TrainerX):
                 # if i % 10 == 0:
                 #     print(f"Epoch: {epoch}, Batch: {i}, Loss: {loss.item()}")
 
-    def test_taal(self):
+    def test_taal(self, cfg):
         correct = 0
         total = 0
         self.model.taal.eval()

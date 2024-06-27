@@ -38,38 +38,23 @@ def setup_train_taal(model):
 
 
 def setup_train_alp(model):
-    model = model.cuda()
-    model = model.float()
-    params = list()
-    for key, value in model.named_parameters():
-        if key == 'prompt_embeddings':
-            value.requires_grad = True
-        elif 'ln' in key:
-            value.requires_grad = True
-        else:
-            value.requires_grad = False
 
+    device_count = torch.cuda.device_count()
+    if device_count > 1:
+        print(f"Multiple GPUs detected (n_gpus={device_count}), use all of them!")
+        model = nn.DataParallel(model)
+
+    for k,v in model.named_parameters():
+        if 'prompt_embeddings' in k:
+            v.requires_grad = True
+            
     print('------------------ Learnable Parameters ------------------')
     for key, value in model.named_parameters():
         if value.requires_grad:
             print("\t{}, {}, {}".format(key, value.numel(), value.shape))
-            params.append((key, value))
     print('----------------------------------------------------------')
 
-    no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
-    optimizer_grouped_parameters = [
-        {'params': [p for n, p in params
-                    if not any(nd in n for nd in no_decay)],
-         'weight_decay': 0.01},
-        {'params': [p for n, p in params
-                    if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
-    ]
-
-    optimizer = optim.AdamW(optimizer_grouped_parameters, lr=args.lr, betas=(0.9, 0.999))
-    scheduler = optim.lr_scheduler.MultiStepLR(optimizer, args.mile_stones, 0.60)
-    criteria = LabelSmoothingCrossEntropy()
-    
-    return optimizer, scheduler, criteria
+    return model
 
 def test_prompting(teloader, model,model_path=None):
     if model_path:
