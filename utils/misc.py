@@ -22,7 +22,7 @@ def extend_cfg(cfg):
     cfg.txt_cls = 'lafter'
     cfg.DEVICE = 'cuda'
     cfg.NUM_TOKENS = 16 # number of  learnable tokens
-    cfg.TAAL_EPOCHS = 5
+    cfg.TAAL_EPOCHS = 50
 
 def setup_cfg(args):
     

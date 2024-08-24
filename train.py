@@ -30,8 +30,8 @@ import datasets.ucm
 
 import trainers.ALP as ALP
 
-import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '4'  # Use the first GPU
+# import os
+# os.environ['CUDA_VISIBLE_DEVICES'] = '2'  # Use the first GPU
 
 
 def setup_seed(seed):
@@ -52,7 +52,7 @@ def main(cfg):
         torch.backends.cudnn.benchmark = True
     
     trainer = build_trainer(cfg)
-    trainer.train()
+    trainer.train(max_epoch=cfg.OPTIM.MAX_EPOCH)
     trainer.test()
 
 

@@ -23,13 +23,19 @@ lafter_datasets = ['DescribableTextures', 'OxfordPets' ,'EuroSAT','AID',
 
 def setup_train_taal(model):
     params = list()
+    
     for key, value in model.named_parameters():
         if 'taal_enc' in key:
             value.requires_grad = False
         else:
             value.requires_grad = True
             params.append((key, value))
-    
+
+#  print trainable parameters
+    for name, param in model.named_parameters():
+        if param.requires_grad:
+            print(name)
+
     optimizer_grouped_parameters = [
         {'params': [p for n, p in params if p.requires_grad]}
     ]
@@ -44,11 +50,22 @@ def setup_train_alp(model):
         print(f"Multiple GPUs detected (n_gpus={device_count}), use all of them!")
         model = nn.DataParallel(model)
 
+    #copy averaged text embeddings to adapter
+    model.adapter.weight.data=model.avg_text_emb.T
+    
+    
     for k,v in model.named_parameters():
         if 'prompt_embeddings' in k:
             v.requires_grad = True
-            
-    print('------------------ Learnable Parameters ------------------')
+
+        if 'taal' in k:
+            v.requires_grad = False
+        
+        if 'adapter' in k:
+            v.requires_grad = True
+
+    
+    print('------------------ Learnable Parameters for ALP training------------------')
     for key, value in model.named_parameters():
         if value.requires_grad:
             print("\t{}, {}, {}".format(key, value.numel(), value.shape))

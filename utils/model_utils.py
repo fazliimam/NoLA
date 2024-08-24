@@ -5,6 +5,7 @@ import PIL.Image as Image
 from PIL import ImageFilter
 import random
 import os
+import pandas as pd
 import numpy as np
 from clip import clip
 
@@ -54,6 +55,59 @@ def top_k_indices_per_class(zero_shot_emb, k):
 
     
     return top_k_original_indices.flatten(), top_k_values.flatten(), top_k_pseudo_labels.flatten()
+
+
+def top_k_indices_per_class2(zero_shot_emb, k):
+    total_emb = zero_shot_emb['total_emb']
+    idxs = zero_shot_emb['idxs']
+    gt = zero_shot_emb['labels']
+
+
+    top3_confidences, top3_predictions = torch.topk(total_emb, k=3, dim=1)
+    df = pd.DataFrame({
+        'idxs': idxs.tolist(),
+        'labels': gt.tolist(),
+        'pred1': top3_predictions[:, 0].tolist(),
+        'pred2': top3_predictions[:, 1].tolist(),
+        'pred3': top3_predictions[:, 2].tolist(),
+        'prob1': top3_confidences[:, 0].tolist(),
+        'prob2': top3_confidences[:, 1].tolist(),
+        'prob3': top3_confidences[:, 2].tolist(),
+    })
+
+    df['correct'] = (df['labels'] == df['pred1']).astype(int)
+    print('Correct predictions percentage: ', df['correct'].mean())
+    pseudo_df = pd.DataFrame()
+
+
+    for pred_label in set(df.labels):
+        sub_label_df = df.loc[(df.pred1 == pred_label)]
+        sub_label_df = sub_label_df.sort_values('prob1', ascending=False).iloc[0:k]
+
+        # if len(sub_label_df) == 0:
+        #     sub_label_df = df.loc[(df.pred2 == pred_label)]
+        #     sub_label_df = sub_label_df.sort_values('prob2', ascending=False).iloc[0:k]
+        #     sub_label_df['pred1'] = sub_label_df['pred2']
+        #     print(f'For label {pred_label}, {len(sub_label_df)} rows selected')
+        #     if len(sub_label_df) == 0:
+        #         sub_label_df = df.loc[(df.pred3 == pred_label)]
+        #         sub_label_df = sub_label_df.sort_values('prob3', ascending=False).iloc[0:k]
+        #         sub_label_df['pred1'] = sub_label_df['pred3']
+        #         print(f'For label {pred_label}, {len(sub_label_df)} rows selected')
+        #         if len(sub_label_df) == 0:
+        #             raise NotImplementedError
+        print(f'acc per class {pred_label}: ', sub_label_df['correct'].mean())
+        pseudo_df = pd.concat((pseudo_df, sub_label_df))    
+
+    pseudo_df = pseudo_df.drop_duplicates(subset=['idxs'])
+    print('Selected pseudo label accuracy: ', (pseudo_df['correct']).mean())
+
+    top_k_original_indices = torch.tensor(pseudo_df['idxs'].values)
+    top_k_values = torch.tensor(pseudo_df['prob1'].values)
+    top_k_pseudo_labels = torch.tensor(pseudo_df['pred1'].values)
+
+    return top_k_original_indices.flatten(), top_k_values.flatten(), top_k_pseudo_labels.flatten()
+
 
 def select_top_k_similarity_per_class(zero_shot_emb, K=1, image_features=None, is_softmax=True):
     # print(outputs.shape)

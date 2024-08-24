@@ -124,10 +124,15 @@ class ALP_RS(nn.Module):
         self.clip_model = clip_model.to(cfg.DEVICE)
         self.taal = Taal(num_classes=len(classes), templates=templates, device=cfg.DEVICE).to(self.device)
 
+        self.adapter = nn.Linear(self.backbone_out_size, len(classes), bias=False).to(self.device)
+
         self.prompt_embeddings = nn.Parameter(torch.zeros(1, self.num_tokens, self.hidden_size), requires_grad=True).to(self.device)
         patch_size = (16, 16)
         val = math.sqrt(6. / float(3 * reduce(mul, patch_size, 1) + prompt_dim))  # noqa
         nn.init.uniform_(self.prompt_embeddings.data, -val, val)
+
+        # register the prompt embeddings as named parameters
+        
 
         self.txt_features_for_text_cls, self.labels_for_text_cls = self.txt_features_for_text_cls()
         self.avg_text_emb = self.gen_emb()  # Average text embeddings for each class
@@ -258,14 +263,14 @@ class ALP_RS(nn.Module):
         with torch.no_grad():
             img_features_2 = self.incorporate_prompt(x)
             img_features_2 = self.embeddings_after_prompts(img_features_2)
-            zs_emb = self.avg_text_emb @ img_features_2
+            zs_emb = img_features_2 @ self.avg_text_emb
         return zs_emb
 
     def forward(self, x):
         # only used for 0-shot-eval
         with torch.no_grad():
             img_features = self.image_features(x)
-            pseudo_label = img_features @ self.avg_text_emb
+            pseudo_label = img_features.to(self.avg_text_emb.device) @ self.avg_text_emb
         return pseudo_label
 
     def forward_aug_with_prompts(self, x2):
@@ -275,9 +280,24 @@ class ALP_RS(nn.Module):
         '''
         img_features_2 = self.incorporate_prompt(x2)
         img_features_2 = self.embeddings_after_prompts(img_features_2)
-        zs_emb = self.avg_text_emb.T @ img_features_2.T
-        return zs_emb
+        img_features_adapter = self.adapter(img_features_2)
+        return img_features_adapter
 
+    def forward_with_text_desc(self, image, text_desc_emb):
+        image_features = self.image_features(image)
+
+        # normalized features
+        image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+        
+        # text_desc_emb = text_desc_emb.half()
+        # cosine similarity as logits
+        logit_scale = self.clip_model.logit_scale.exp()
+        logits_per_image = logit_scale * image_features @ text_desc_emb
+        logits_per_text = logit_scale * text_desc_emb.t() @ image_features.t()
+
+        # shape = [global_batch_size, global_batch_size]
+        return logits_per_image, logits_per_text
+    
     def forward_taal(self,x):
         return self.taal(x)
 
@@ -318,14 +338,15 @@ class ALP(TrainerX):
 
     def setup_optim(self):
         params = []
-        for k, v in self.model.clip_model.named_parameters():
-            if 'ln' in k:
+        for k, v in self.model.named_parameters():
+            if 'ln' in k and 'visual' in k:
+                v.requires_grad = True
+                params.append((k,v))
+            elif 'prompt_embedding' in k:
                 v.requires_grad = True
                 params.append((k,v))
             else:
                 v.requires_grad = False
-
-        
 
         no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
 
@@ -365,7 +386,11 @@ class ALP(TrainerX):
         self.model = ALP_RS(clip_model=clip_model, classes=classnames,
                                           templates=[text_pr], ds_templates = ds_specific_templates[cfg.DATASET.NAME], cfg=cfg)
 
+        for k,v in self.model.clip_model.named_parameters():
+            v.requires_grad = False
+
         self.optim, self.scheduler, self.criterion = self.setup_optim() 
+
         self.register_model("adapt", self.model, self.optim, self.scheduler)
 
     def build_data_loader(self):
@@ -397,6 +422,13 @@ class ALP(TrainerX):
             input = batch['img']
             input = input.to(self.device)
 
+        label = batch["label"]
+        label = label.to(self.device)
+        return input, label
+
+    def parse_batch_test(self, batch):
+        input = batch["img"]
+        input = input.to(self.device)
         label = batch["label"]
         label = label.to(self.device)
         return input, label
@@ -449,10 +481,10 @@ class ALP(TrainerX):
         self.time_start = time.time()
 
         # get top_k dataset
-        top_k_dataset = self.select_top_k(k=16)
+        top_k_dataset = self.select_top_k(k=270)
 
         # train taal using top_k dataset
-        train_loader = DataLoader(top_k_dataset, batch_size=8192, shuffle=True, num_workers=4)
+        train_loader = DataLoader(top_k_dataset, batch_size=32, shuffle=True, num_workers=4)
 
         self.train_taal(self.cfg, train_loader)
         self.test_taal(self.cfg)
@@ -463,9 +495,13 @@ class ALP(TrainerX):
 
         input_x, label_x = self.parse_batch_train(batch_x)
 
-        out_psuedo = self.model.taal(input_x[0])
+        pl = self.model.taal(input_x[0])
+        pseudo_label = F.softmax(pl, dim=-1)  # / 0.04
+        pseudo_label = pseudo_label.argmax(dim=1, keepdim=True)
+        pseudo_label = pseudo_label.flatten()
+
         output_x = self.model.forward_aug_with_prompts(input_x[1].float())
-        loss_x = self.criterion(output_x.squeeze(), out_psuedo)
+        loss_x = self.criterion(output_x.squeeze(), pseudo_label)
 
         self.model_backward_and_update(loss_x)
 
@@ -485,13 +521,13 @@ class ALP(TrainerX):
             })
         
         return TopKDataset1(data)
-
+    
     def select_top_k(self, k=16):
         # if file exists, load the embeddings
         if os.path.isfile(f'embeddings/{self.cfg.DATASET.NAME}_total_emb.pt'):
             print('******** Loading Already Saved Averaged Text Embeddings *********')
             total_emb = torch.load(f'embeddings/{self.cfg.DATASET.NAME}_total_emb.pt')
-            top_k_idxs, top_k_conf, top_k_pseudo = top_k_indices_per_class(total_emb, k)
+            top_k_idxs, top_k_conf, top_k_pseudo = top_k_indices_per_class2(total_emb, k)
             self.top_k_idxs = top_k_idxs
 
             # return TopKDataset(self.train_loader_x.dataset, top_k_idxs.cpu().numpy(), top_k_conf.cpu().numpy(), top_k_pseudo.cpu().numpy())
@@ -514,12 +550,15 @@ class ALP(TrainerX):
         idxs = []
         labels = []
         impaths = []
-        train_loader = DataLoader(self.train_loader_x.dataset, batch_size=16, shuffle=False, num_workers=4)
+        train_loader = DataLoader(self.train_loader_x.dataset, batch_size=128, shuffle=False, num_workers=4)
         self.model.eval()
         for batch in tqdm(train_loader):
             input = torch.stack(batch['img']).to(self.device)
-            vision_emb = self.model.image_features(input[0])
-            temp = vision_emb @ text_emb
+            # vision_emb = self.model.image_features(input[0])
+            # temp = vision_emb @ text_emb
+            with torch.no_grad():
+                temp, _ =self.model.forward_with_text_desc(input[0], text_emb)
+                temp = temp.softmax(dim=-1)
             total_emb.append(temp)
             idxs.append(batch['index'])
             impaths.append(batch['impath'])
@@ -532,7 +571,7 @@ class ALP(TrainerX):
             }
         
         torch.save(emb_dict, f'embeddings/{self.cfg.DATASET.NAME}_total_emb.pt')
-        top_k_idxs, top_k_conf, top_k_pseudo = top_k_indices_per_class(emb_dict, k)
+        top_k_idxs, top_k_conf, top_k_pseudo = top_k_indices_per_class2(emb_dict, k)
         self.top_k_idxs = top_k_idxs
 
         # return TopKDataset(self.train_loader_x.dataset, top_k_idxs, top_k_conf, top_k_pseudo)
@@ -541,7 +580,7 @@ class ALP(TrainerX):
     def train_taal(self, cfg, train_loader):
         # setup train taal
         optimizer = setup_train_taal(self.model.taal)
-
+        
         criterion = nn.CrossEntropyLoss()
         # train the adapter
         self.model.taal.train()
@@ -566,12 +605,74 @@ class ALP(TrainerX):
             for i, batch in enumerate(self.test_loader):
                 input, label = self.parse_batch_train(batch)
                 output = self.model.taal(input)
-                _, predicted = torch.max(output.data, 1)
+                _, predicted = torch.max(output, 1)
                 total += label.size(0)
                 correct += (predicted == label).sum().item()
         if self._writer:
             self._writer.add_scalar("test/accuracy_taal", 100 * correct / total, 0)
         print(f'Accuracy of the network on the {total} test images: {100 * correct / total}')
+
+    def model_inference(self, input):
+        return self.model.eval_clip(input)
+
+    def after_epoch(self):
+        last_epoch = (self.epoch + 1) == self.max_epoch
+        do_test = not self.cfg.TEST.NO_TEST
+        meet_checkpoint_freq = (
+            (self.epoch + 1) % self.cfg.TRAIN.CHECKPOINT_FREQ == 0
+            if self.cfg.TRAIN.CHECKPOINT_FREQ > 0 else False
+        )
+
+        if do_test and self.cfg.TEST.FINAL_MODEL == "best_val":
+            curr_result = self.test(split="val")
+            is_best = curr_result > self.best_result
+            if is_best:
+                self.best_result = curr_result
+                self.save_model(
+                    self.epoch,
+                    self.output_dir,
+                    val_result=curr_result,
+                    model_name="model-best.pth.tar"
+                )
+            return curr_result
+
+        if meet_checkpoint_freq or last_epoch:
+            self.save_model(self.epoch, self.output_dir)
+
+        return None
+    
+    def train(self, start_epoch=0, max_epoch=50, patience=15):
+        """Generic training loop with early stopping based on patience."""
+        self.start_epoch = start_epoch
+        self.max_epoch = max_epoch
+        self.patience = patience
+
+        best_result = None
+        epochs_no_improve = 0
+
+        self.before_train()
+        for self.epoch in range(self.start_epoch, self.max_epoch):
+            self.before_epoch()
+            self.run_epoch()
+            cur_result = self.after_epoch()
+
+            # Check if the result has improved
+            if best_result is None or cur_result > best_result:
+                best_result = cur_result
+                print(f"New best result: {best_result} in epoch {self.epoch}")
+                epochs_no_improve = 0  # Reset counter
+            else:
+                epochs_no_improve += 1
+
+            # Early stopping condition
+            if epochs_no_improve >= self.patience:
+                print(f"No improvement for {self.patience} epochs. Stopping training.")
+                break
+
+        print(f"Best result during training: {best_result}")
+
+        self.after_train()
+
 
 
 

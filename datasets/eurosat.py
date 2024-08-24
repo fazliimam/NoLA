@@ -30,7 +30,7 @@ class EuroSAT(DatasetBase):
         root = os.path.abspath(os.path.expanduser(cfg.DATASET.ROOT))
         self.dataset_dir = os.path.join(root, self.dataset_dir)
         self.image_dir = os.path.join(self.dataset_dir, "2750")
-        self.split_path = os.path.join(self.dataset_dir, "eurosat_split.json")
+        self.split_path = os.path.join(self.dataset_dir, "split_zhou_EuroSAT.json")
         
         self.split_fewshot_dir = os.path.join(self.dataset_dir, "split_fewshot")
         mkdir_if_missing(self.split_fewshot_dir)
