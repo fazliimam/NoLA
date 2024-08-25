@@ -61,6 +61,7 @@ def top_k_indices_per_class2(zero_shot_emb, k):
     total_emb = zero_shot_emb['total_emb']
     idxs = zero_shot_emb['idxs']
     gt = zero_shot_emb['labels']
+    print(f'Selecting top {k} pseudo labels per class')
 
 
     top3_confidences, top3_predictions = torch.topk(total_emb, k=3, dim=1)

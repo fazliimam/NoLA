@@ -65,7 +65,7 @@ def setup_train_alp(model):
             v.requires_grad = True
 
     
-    print('------------------ Learnable Parameters for ALP training------------------')
+    print('------------------ Learnable Parameters for NoLA training------------------')
     for key, value in model.named_parameters():
         if value.requires_grad:
             print("\t{}, {}, {}".format(key, value.numel(), value.shape))

@@ -239,6 +239,40 @@ class ALP_RS(nn.Module):
 
         return other_tensor_split.T
 
+
+    def gen_emb2(self):
+        if os.path.isfile(f'embeddings/{self.dataset_name}_avg_text_emb.pt'):
+            print('******** Loading Already Saved Averaged Text Embeddings *********')
+            return torch.load(f'embeddings/{self.dataset_name}_avg_text_emb.pt')
+        
+        path_to_file = f'./descriptions/generic/{self.dataset_name}.json'
+        print(path_to_file)
+        with open(path_to_file) as f:
+            gpt3_prompts = json.load(f)
+        desc, labels_for_descriptions = gen_labels_with_descrptions(self.classes, descriptions=gpt3_prompts)
+        templates, labels_for_templates = gen_labels_with_templates(self.classes, descriptions=self.dataset_templates)
+        desc += templates
+        labels_for_descriptions += labels_for_templates
+
+        Path(f'embeddings').mkdir(parents=True, exist_ok=True)
+
+        zeroshot_weights = []
+        with torch.no_grad():
+            for c in range(len(self.classes)):
+                text = [desc[idx.item()] for idx in (torch.tensor(labels_for_descriptions).cuda()==c).nonzero()]
+                text = tokenize(text).cuda()  # tokenize # (50, 77) --> 50 templates/texts from GPT
+                class_embeddings = self.model.encode_text(text)  # embed with text encoder # (50, 512) --> embeddings for all 50 texts
+                class_embeddings /= class_embeddings.norm(dim=-1, keepdim=True)  # L2 norm of the embeddings (dim 2)
+                class_embedding = class_embeddings.mean(dim=0, keepdim=True)
+                class_embedding /= class_embedding.norm()
+
+                zeroshot_weights.append(class_embedding)
+            zeroshot_weights = torch.stack(zeroshot_weights).cuda()  # (512, 10) --> 512 embeddings for 10 classes'
+            
+            torch.save((zeroshot_weights), f'embeddings/{self.dataset_name}_avg_text_emb.pt')
+
+        return zeroshot_weights
+
     def txt_features(self):
         with torch.no_grad():
             zeroshot_weights = []
@@ -359,7 +393,8 @@ class ALP(TrainerX):
                         if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
         ]
         optimizer = optim.AdamW(optimizer_grouped_parameters, lr=self.cfg.OPTIM.LR, betas=(0.9, 0.999))
-        scheduler = optim.lr_scheduler.MultiStepLR(optimizer, None, 0.60)
+        # scheduler = optim.lr_scheduler.MultiStepLR(optimizer, None, 0.60)
+        scheduler = optim.lr_scheduler.MultiStepLR(optimizer, None, 0.20)
         criteria = LabelSmoothingCrossEntropy()
 
         return optimizer, scheduler, criteria
@@ -481,13 +516,13 @@ class ALP(TrainerX):
         self.time_start = time.time()
 
         # get top_k dataset
-        top_k_dataset = self.select_top_k(k=270)
+        top_k_dataset = self.select_top_k(k=16)
 
         # train taal using top_k dataset
         train_loader = DataLoader(top_k_dataset, batch_size=32, shuffle=True, num_workers=4)
 
         self.train_taal(self.cfg, train_loader)
-        self.test_taal(self.cfg)
+        self.test_taal(self.cfg)    
 
         self.model = setup_train_alp(self.model)
 
@@ -503,7 +538,10 @@ class ALP(TrainerX):
         output_x = self.model.forward_aug_with_prompts(input_x[1].float())
         loss_x = self.criterion(output_x.squeeze(), pseudo_label)
 
-        self.model_backward_and_update(loss_x)
+        self.model_backward_and_update(loss_x, names="adapt")
+        self.update_lr(names="adapt")
+        # self.model_backward_and_update(loss_x)
+        # self.update_lr(names="adapt")
 
         loss_summary = {
             "loss_x": loss_x.item(),
@@ -522,7 +560,7 @@ class ALP(TrainerX):
         
         return TopKDataset1(data)
     
-    def select_top_k(self, k=16):
+    def select_top_k(self, k):
         # if file exists, load the embeddings
         if os.path.isfile(f'embeddings/{self.cfg.DATASET.NAME}_total_emb.pt'):
             print('******** Loading Already Saved Averaged Text Embeddings *********')
