@@ -65,7 +65,7 @@ def setup_train_alp(model):
             v.requires_grad = True
 
     
-    print('------------------ Learnable Parameters for NoLA training------------------')
+    print('------------------ Learnable Parameters for ALP training------------------')
     for key, value in model.named_parameters():
         if value.requires_grad:
             print("\t{}, {}, {}".format(key, value.numel(), value.shape))
@@ -73,13 +73,57 @@ def setup_train_alp(model):
 
     return model
 
+
+def setup_train_nola(model, lrate):
+    model = model.cuda()
+    model = model.float()
+    params = list()
+    model.adapter[0].weight.data=model.avg_text_emb.T
+
+    for key, value in model.named_parameters():
+        value.requires_grad = False
+        
+        if 'prompt_embeddings' in key:
+            value.requires_grad = True
+        if 'adapter' in key:
+            value.requires_grad = True
+        if 'visual'in key and 'ln' in key:
+            value.requires_grad = True
+        if 'taal' in key:
+            value.requires_grad = False
+        
+    for key, value in model.named_parameters():
+        if 'visual' in key:
+            if 'ln' in key or 'bn' in key:
+                value.requires_grad = True
+
+    # print('------------------ Learnable Parameters in NoLA ------------------')
+    for key, value in model.named_parameters():
+        if value.requires_grad:
+            # print("\t{}, {}, {}".format(key, value.numel(), value.shape))
+            params.append((key, value))
+    # print('----------------------------------------------------------')
+
+    no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
+    optimizer_grouped_parameters = [
+        {'params': [p for n, p in params
+                    if not any(nd in n for nd in no_decay)],
+         'weight_decay': 0.01},
+        {'params': [p for n, p in params
+                    if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
+    ]
+
+    optimizer = optim.AdamW(optimizer_grouped_parameters, lrate, betas=(0.9, 0.999))
+    scheduler = optim.lr_scheduler.MultiStepLR(optimizer, None, 0.20)
+    criteria = LabelSmoothingCrossEntropy()
+
+    return optimizer, scheduler, criteria
+
+
+
 def test_prompting(teloader, model,model_path=None):
     if model_path:
         model.load_state_dict(torch.load(model_path))
-        # pretrained_model = torch.load(model_path, map_location=model.device)
-        # state_dict = pretrained_model["state_dict"]
-        # model.adapter.load_state_dict(state_dict)
-        # model.prompt_embeddings=pretrained_model['prompt_emb']
 
     model.eval()
     batch_time = AverageMeter('Time', ':6.3f')

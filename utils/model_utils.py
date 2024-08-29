@@ -85,19 +85,20 @@ def top_k_indices_per_class2(zero_shot_emb, k):
         sub_label_df = df.loc[(df.pred1 == pred_label)]
         sub_label_df = sub_label_df.sort_values('prob1', ascending=False).iloc[0:k]
 
-        # if len(sub_label_df) == 0:
-        #     sub_label_df = df.loc[(df.pred2 == pred_label)]
-        #     sub_label_df = sub_label_df.sort_values('prob2', ascending=False).iloc[0:k]
-        #     sub_label_df['pred1'] = sub_label_df['pred2']
-        #     print(f'For label {pred_label}, {len(sub_label_df)} rows selected')
-        #     if len(sub_label_df) == 0:
-        #         sub_label_df = df.loc[(df.pred3 == pred_label)]
-        #         sub_label_df = sub_label_df.sort_values('prob3', ascending=False).iloc[0:k]
-        #         sub_label_df['pred1'] = sub_label_df['pred3']
-        #         print(f'For label {pred_label}, {len(sub_label_df)} rows selected')
-        #         if len(sub_label_df) == 0:
-        #             raise NotImplementedError
-        print(f'acc per class {pred_label}: ', sub_label_df['correct'].mean())
+        if len(sub_label_df) == 0:
+            sub_label_df = df.loc[(df.pred2 == pred_label)]
+            sub_label_df = sub_label_df.sort_values('prob2', ascending=False).iloc[0:k]
+            sub_label_df['pred1'] = sub_label_df['pred2']
+            print(f'For label {pred_label}, {len(sub_label_df)} rows selected')
+            if len(sub_label_df) == 0:
+                sub_label_df = df.loc[(df.pred3 == pred_label)]
+                sub_label_df = sub_label_df.sort_values('prob3', ascending=False).iloc[0:k]
+                sub_label_df['pred1'] = sub_label_df['pred3']
+                print(f'For label {pred_label}, {len(sub_label_df)} rows selected')
+                if len(sub_label_df) == 0:
+                    raise NotImplementedError
+        correct_acc = (sub_label_df['labels'] == sub_label_df['pred1']).sum() / len(sub_label_df)
+        print(f'acc per class {pred_label}: {correct_acc}')
         pseudo_df = pd.concat((pseudo_df, sub_label_df))    
 
     pseudo_df = pseudo_df.drop_duplicates(subset=['idxs'])

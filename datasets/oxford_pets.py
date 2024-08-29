@@ -132,7 +132,10 @@ class OxfordPets(DatasetBase):
         print(f"Reading split from {filepath}")
         split = read_json(filepath)
         train = _convert(split["train"])
-        val = _convert(split["val"])
+        try:
+            val = _convert(split["val"])
+        except KeyError:
+            val = None
         test = _convert(split["test"])
 
         return train, val, test

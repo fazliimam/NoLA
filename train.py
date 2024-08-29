@@ -43,6 +43,19 @@ def setup_seed(seed):
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
 
+def print_args(args, cfg):
+    print("***************")
+    print("** Arguments **")
+    print("***************")
+    optkeys = list(args.__dict__.keys())
+    optkeys.sort()
+    for key in optkeys:
+        print("{}: {}".format(key, args.__dict__[key]))
+    print("************")
+    print("** Config **")
+    print("************")
+    print(cfg)
+
 def main(cfg):
 
     setup_seed(cfg.SEED)
@@ -52,7 +65,7 @@ def main(cfg):
         torch.backends.cudnn.benchmark = True
     
     trainer = build_trainer(cfg)
-    trainer.train(max_epoch=cfg.OPTIM.MAX_EPOCH)
+    trainer.train(max_epoch=cfg.OPTIM.MAX_EPOCH, cfg=cfg)
     trainer.test()
 
 
@@ -64,7 +77,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dataset-config-file",
         type=str,
-        default="configs/datasets/eurosat.yaml",
+        default="configs/datasets/imagenet.yaml",
         help="path to config file for dataset setup",
     )
     parser.add_argument(

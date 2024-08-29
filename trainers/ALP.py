@@ -43,6 +43,44 @@ def load_clip_to_cpu(backbone_name):
 
 
 
+class lossmeter:
+    """Compute and store the average and current value.
+
+    Examples::
+        >>> # 1. Initialize a meter to record loss
+        >>> losses = AverageMeter()
+        >>> # 2. Update meter after every mini-batch update
+        >>> losses.update(loss_value, batch_size)
+    """
+
+    def __init__(self, ema=False):
+        """
+        Args:
+            ema (bool, optional): apply exponential moving average.
+        """
+        self.ema = ema
+        self.reset()
+
+    def reset(self):
+        self.val = 0
+        self.avg = 0
+        self.sum = 0
+        self.count = 0
+
+    def update(self, val, n=1):
+        if isinstance(val, torch.Tensor):
+            val = val.item()
+
+        self.val = val
+        self.sum += val * n
+        self.count += n
+
+        if self.ema:
+            self.avg = self.avg * 0.9 + self.val * 0.1
+        else:
+            self.avg = self.sum / self.count
+
+
 class TopKDataset(Dataset):
     def __init__(self, data, top_k_idxs, top_k_conf, top_k_pseudo):
         self.data = data
@@ -124,9 +162,9 @@ class ALP_RS(nn.Module):
         self.clip_model = clip_model.to(cfg.DEVICE)
         self.taal = Taal(num_classes=len(classes), templates=templates, device=cfg.DEVICE).to(self.device)
 
-        self.adapter = nn.Linear(self.backbone_out_size, len(classes), bias=False).to(self.device)
+        self.adapter = nn.Sequential(nn.Linear(int(self.backbone_out_size), len(classes), bias=False)).to(self.device)
 
-        self.prompt_embeddings = nn.Parameter(torch.zeros(1, self.num_tokens, self.hidden_size), requires_grad=True).to(self.device)
+        self.prompt_embeddings = nn.Parameter(torch.zeros(1, self.num_tokens, self.hidden_size), requires_grad=True)
         patch_size = (16, 16)
         val = math.sqrt(6. / float(3 * reduce(mul, patch_size, 1) + prompt_dim))  # noqa
         nn.init.uniform_(self.prompt_embeddings.data, -val, val)
@@ -135,8 +173,8 @@ class ALP_RS(nn.Module):
         
 
         self.txt_features_for_text_cls, self.labels_for_text_cls = self.txt_features_for_text_cls()
-        self.avg_text_emb = self.gen_emb()  # Average text embeddings for each class
-        self.text_features = self.txt_features()
+        self.avg_text_emb = self.gen_emb2()  # Average text embeddings for each class
+        # self.text_features = self.txt_features()
 
     def txt_features_for_text_cls(self):
 
@@ -235,8 +273,8 @@ class ALP_RS(nn.Module):
         other_tensor_split = torch.stack(group_list)
 
         # save the embeddings
-        torch.save(other_tensor_split, f'embeddings/{self.dataset_name}_avg_text_emb.pt')
-
+        # torch.save(other_tensor_split, f'embeddings/{self.dataset_name}_avg_text_emb.pt')
+        breakpoint()
         return other_tensor_split.T
 
 
@@ -260,8 +298,9 @@ class ALP_RS(nn.Module):
         with torch.no_grad():
             for c in range(len(self.classes)):
                 text = [desc[idx.item()] for idx in (torch.tensor(labels_for_descriptions).cuda()==c).nonzero()]
+                # text = [template.format(classname) for template in self.templates]  # format with class
                 text = tokenize(text).cuda()  # tokenize # (50, 77) --> 50 templates/texts from GPT
-                class_embeddings = self.model.encode_text(text)  # embed with text encoder # (50, 512) --> embeddings for all 50 texts
+                class_embeddings = self.clip_model.encode_text(text)  # embed with text encoder # (50, 512) --> embeddings for all 50 texts
                 class_embeddings /= class_embeddings.norm(dim=-1, keepdim=True)  # L2 norm of the embeddings (dim 2)
                 class_embedding = class_embeddings.mean(dim=0, keepdim=True)
                 class_embedding /= class_embedding.norm()
@@ -269,9 +308,9 @@ class ALP_RS(nn.Module):
                 zeroshot_weights.append(class_embedding)
             zeroshot_weights = torch.stack(zeroshot_weights).cuda()  # (512, 10) --> 512 embeddings for 10 classes'
             
-            torch.save((zeroshot_weights), f'embeddings/{self.dataset_name}_avg_text_emb.pt')
-
-        return zeroshot_weights
+            # torch.save((zeroshot_weights), f'embeddings/{self.dataset_name}_avg_text_emb.pt')
+        zeroshot_weights =  zeroshot_weights.squeeze(1)
+        return zeroshot_weights.T
 
     def txt_features(self):
         with torch.no_grad():
@@ -373,10 +412,11 @@ class ALP(TrainerX):
     def setup_optim(self):
         params = []
         for k, v in self.model.named_parameters():
-            if 'ln' in k and 'visual' in k:
+            if 'prompt_embeddings' in k:
                 v.requires_grad = True
                 params.append((k,v))
-            elif 'prompt_embedding' in k:
+            
+            if 'ln' in k and 'visual' in k:
                 v.requires_grad = True
                 params.append((k,v))
             else:
@@ -420,13 +460,15 @@ class ALP(TrainerX):
         print(f"Using prompt: {text_pr}")
         self.model = ALP_RS(clip_model=clip_model, classes=classnames,
                                           templates=[text_pr], ds_templates = ds_specific_templates[cfg.DATASET.NAME], cfg=cfg)
+        
+        self.register_model("adapt", self.model)
 
         for k,v in self.model.clip_model.named_parameters():
             v.requires_grad = False
 
-        self.optim, self.scheduler, self.criterion = self.setup_optim() 
+        # self.optim, self.scheduler, self.criterion = self.setup_optim() 
 
-        self.register_model("adapt", self.model, self.optim, self.scheduler)
+        # self.register_model("adapt", self.model, self.optim, self.scheduler)
 
     def build_data_loader(self):
         """Create essential data-related attributes.
@@ -446,6 +488,8 @@ class ALP(TrainerX):
         self.lab2cname = dm.lab2cname  # dict {label: classname}
 
         self.dm = dm
+
+        return self.train_loader_x, self.val_loader, self.test_loader
 
     def parse_batch_train(self, batch):
 
@@ -502,29 +546,29 @@ class ALP(TrainerX):
             # set strict=False
             self._models[name].load_state_dict(state_dict, strict=False)
     
-    def before_train(self):
+    # def before_train(self):
 
-        # Initialize summary writer
-        writer_dir = osp.join(self.output_dir, "tensorboard")
-        os.makedirs(writer_dir, exist_ok=True)
-        self.init_writer(writer_dir)
+    #     # Initialize summary writer
+    #     writer_dir = osp.join(self.output_dir, "tensorboard")
+    #     os.makedirs(writer_dir, exist_ok=True)
+    #     self.init_writer(writer_dir)
 
-        # if self.cfg.STAGE == 'train_alp':
-        #     return
+    #     # if self.cfg.STAGE == 'train_alp':
+    #     #     return
         
-        # Remember the starting time (for computing the elapsed time)
-        self.time_start = time.time()
+    #     # Remember the starting time (for computing the elapsed time)
+    #     self.time_start = time.time()
 
-        # get top_k dataset
-        top_k_dataset = self.select_top_k(k=16)
+    #     # get top_k dataset
+    #     top_k_dataset = self.select_top_k(k=16)
 
-        # train taal using top_k dataset
-        train_loader = DataLoader(top_k_dataset, batch_size=32, shuffle=True, num_workers=4)
+    #     # train taal using top_k dataset
+    #     train_loader = DataLoader(top_k_dataset, batch_size=32, shuffle=True, num_workers=4)
 
-        self.train_taal(self.cfg, train_loader)
-        self.test_taal(self.cfg)    
+    #     self.train_taal(self.cfg, train_loader)
+    #     self.test_taal(self.cfg)    
 
-        self.model = setup_train_alp(self.model)
+    #     self.model = setup_train_alp(self.model)
 
     def forward_backward(self, batch_x):
 
@@ -679,37 +723,99 @@ class ALP(TrainerX):
 
         return None
     
-    def train(self, start_epoch=0, max_epoch=50, patience=15):
+    def train(self, start_epoch=0, max_epoch=50, cfg=None):
+        print("************")
+        print("** Config **")
+        print("************")
+        print(cfg)
+
+
         """Generic training loop with early stopping based on patience."""
         self.start_epoch = start_epoch
         self.max_epoch = max_epoch
-        self.patience = patience
 
-        best_result = None
-        epochs_no_improve = 0
+        # writer_dir = osp.join(self.output_dir, "tensorboard")
+        # os.makedirs(writer_dir, exist_ok=True)
+        # self.init_writer(writer_dir)
+        self.time_start = time.time()
 
-        self.before_train()
-        for self.epoch in range(self.start_epoch, self.max_epoch):
-            self.before_epoch()
-            self.run_epoch()
-            cur_result = self.after_epoch()
+        k=256
+        print("************")
+        print("** Setting k **", k)
+        print("************")
+        top_k_dataset = self.select_top_k(k)
 
-            # Check if the result has improved
-            if best_result is None or cur_result > best_result:
-                best_result = cur_result
-                print(f"New best result: {best_result} in epoch {self.epoch}")
-                epochs_no_improve = 0  # Reset counter
+        train_loader = DataLoader(top_k_dataset, batch_size=32, shuffle=True, num_workers=4)
+
+        self.train_taal(self.cfg, train_loader)
+        self.test_taal(self.cfg)    
+
+
+        # self.model = setup_train_alp(self.model)
+        optimizer, scheduler, criteria = setup_train_nola(self.model, lrate=self.cfg.OPTIM.LR)
+        tr_loader, val_loader, te_loader = self.train_loader_x, self.val_loader, self.test_loader
+
+        
+        print('------------------ Learnable Parameters in NoLA ------------------')
+        for key, value in self.model.named_parameters():
+            if value.requires_grad:
+                print("\t{}, {}, {}".format(key, value.numel(), value.shape))
+        print('----------------------------------------------------------')
+
+        # Initialize early stopping parameters
+        early_stopping_counter = 0
+        early_stopping_threshold = 15
+        best_acc = 0.0
+
+        if self.model.prompt_embeddings.requires_grad:
+            print("Prompt embeddings are trainable.")
+
+        for epoch in range(start_epoch, max_epoch):
+
+            for i, batch in tqdm(enumerate(tr_loader), total=len(tr_loader)):
+                input = batch["img"]
+                input = torch.stack(input)  # two views from dataloader
+                input = input.to(self.model.device)
+
+                optimizer.zero_grad()
+                with torch.no_grad():
+                    pl = self.model.taal(input[0])
+                    pseudo_label = F.softmax(pl, dim=-1)  # / 0.04
+                    pseudo_label = pseudo_label.argmax(dim=1, keepdim=True)
+                    pseudo_label = pseudo_label.flatten()
+
+                output_x = self.model.forward_aug_with_prompts(input[1].float())
+                loss = criteria(output_x.squeeze(), pseudo_label)
+                    
+                loss.backward()
+                optimizer.step()
+            scheduler.step()
+            try:
+                val_acc = test_prompting(val_loader, self.model)
+            except:
+                val_acc = test_prompting(te_loader, self.model)
+
+            print(f'Validation Accuracy: {val_acc} at epoch {epoch}')
+
+            if val_acc>best_acc:
+                best_acc=val_acc
+                early_stopping_counter = 0
+                best_test_acc = test_prompting(te_loader, self.model)
+                print("Best Epoch ", epoch)
+                print("Best Val acc", val_acc)
+                print("Test acc ", best_test_acc)
+
             else:
-                epochs_no_improve += 1
+                early_stopping_counter += 1
 
-            # Early stopping condition
-            if epochs_no_improve >= self.patience:
-                print(f"No improvement for {self.patience} epochs. Stopping training.")
+            if early_stopping_counter == early_stopping_threshold:
+                print(f'Early stopping at epoch {epoch} due to no improvement in validation accuracy.')
                 break
 
-        print(f"Best result during training: {best_result}")
+            print('------------')
+   
 
-        self.after_train()
+        # self.after_train()
 
 
 

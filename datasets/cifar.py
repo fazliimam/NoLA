@@ -169,6 +169,7 @@ class CIFAR10_local(DatasetBase):
         items_x = []
         for label, class_name in enumerate(class_names_):
             class_dir = osp.join(data_dir, class_name)
+            class_dir = class_dir.replace(" ", "_")
             imnames = listdir_nohidden(class_dir)
             num_val = math.floor(len(imnames) * val_percent)
             imnames_train = imnames[num_val:]
