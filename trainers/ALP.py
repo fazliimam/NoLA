@@ -1,15 +1,17 @@
 from torch.nn import Dropout
 from torch.utils.data import DataLoader
+import torchvision.transforms as transforms
 import math
 import os.path as osp
 from dassl.engine import TRAINER_REGISTRY, TrainerX
+from dassl.utils import read_image
 from dassl.utils import load_checkpoint
 from dassl.data.data_manager import DataManager
 from clip.simple_tokenizer import SimpleTokenizer as _Tokenizer
 from clip.clip import tokenize
 _tokenizer = _Tokenizer()
 from torch.utils.data import Dataset, DataLoader
-
+import time
 import sys
 # import sys
 sys.path.append("../")
@@ -82,8 +84,9 @@ class lossmeter:
 
 
 class TopKDataset(Dataset):
-    def __init__(self, data, top_k_idxs, top_k_conf, top_k_pseudo):
-        self.data = data
+    def __init__(self, data, transform, top_k_idxs, top_k_conf, top_k_pseudo):
+        self.data_source = data
+        self.transform = transform
         self.top_k_idxs = top_k_idxs
         self.top_k_conf = top_k_conf
         self.top_k_pseudo = top_k_pseudo
@@ -92,33 +95,62 @@ class TopKDataset(Dataset):
         return len(self.top_k_idxs)
 
     def __getitem__(self, idx):
+
         new_idx = self.top_k_idxs[idx]
-        return {
-            'img': self.data[new_idx]['img'],
-            'label': torch.tensor(self.top_k_pseudo[idx], dtype=torch.long),
-            'label_conf': torch.tensor(self.top_k_conf[idx], dtype=torch.float32),
-            'ground_labels': torch.tensor(self.data[new_idx]['label'], dtype=torch.long),
+        item = self.data_source[new_idx]
+
+        output = {
+            'label': self.top_k_pseudo[idx],
+            'label_conf': self.top_k_conf[idx],
+            'ground_truth': item.label,
         }
+
+        img0 = read_image(item.impath)
+
+        if self.transform is not None:
+            img = self.transform(img0)
+            output["img"] = img
+        else:
+            output["img"] = img0
+        
+        return output
     
-class TopKDataset1(Dataset):
-    def __init__(self, data_list):
-        self.data_list = data_list
+    
+# class TopKDataset1(Dataset):
+#     def __init__(self, data_list):
+#         self.data_list = data_list
+#     def __len__(self):
+#         return len(self.data_list)
+
+#     def __getitem__(self, idx):
+#         return self.data_list[idx]
+class DictDataset(Dataset):
+    def __init__(self, data_dict, transform=None):
+
+        self.data_dict = data_dict
+
     def __len__(self):
-        return len(self.data_list)
+        return next(iter(self.data_dict.values())).size(0)
 
     def __getitem__(self, idx):
-        return self.data_list[idx]
+        if torch.is_tensor(idx):
+            idx = idx.tolist()
+        sample = {key: value[idx] for key, value in self.data_dict.items()}
+        return sample
     
 class Taal(nn.Module):
     def __init__(self, num_classes, templates, device='cuda'):
         super(Taal, self).__init__()
 
         self.taal_enc =  torch.hub.load('facebookresearch/dino:main', 'dino_vitb16')
+        self.taal_enc.head = nn.Identity()
+        self.taal_enc.eval()
         in_features = self.taal_enc.cls_token.shape[-1]
         self.taal_adt = AdapterMLP(num_classes=num_classes, input_size=in_features, hidden_size=256)
 
     def forward(self, x):
-        op = self.taal_enc(x)
+        with torch.no_grad():
+            op = self.taal_enc(x)
         op = self.taal_adt(op)
         return op
     
@@ -279,9 +311,9 @@ class ALP_RS(nn.Module):
 
 
     def gen_emb2(self):
-        if os.path.isfile(f'embeddings/{self.dataset_name}_avg_text_emb.pt'):
+        if os.path.isfile(f'embeddings/{self.txt_cls}_{self.dataset_name}.pt'):
             print('******** Loading Already Saved Averaged Text Embeddings *********')
-            return torch.load(f'embeddings/{self.dataset_name}_avg_text_emb.pt')
+            return torch.load(f'embeddings/{self.txt_cls}_{self.dataset_name}.pt')
         
         path_to_file = f'./descriptions/generic/{self.dataset_name}.json'
         print(path_to_file)
@@ -307,10 +339,11 @@ class ALP_RS(nn.Module):
 
                 zeroshot_weights.append(class_embedding)
             zeroshot_weights = torch.stack(zeroshot_weights).cuda()  # (512, 10) --> 512 embeddings for 10 classes'
+            zeroshot_weights =  zeroshot_weights.squeeze(1)
+            zeroshot_weights = zeroshot_weights.T
             
-            # torch.save((zeroshot_weights), f'embeddings/{self.dataset_name}_avg_text_emb.pt')
-        zeroshot_weights =  zeroshot_weights.squeeze(1)
-        return zeroshot_weights.T
+            torch.save((zeroshot_weights), f'embeddings/{self.txt_cls}_{self.dataset_name}.pt')
+        return zeroshot_weights
 
     def txt_features(self):
         with torch.no_grad():
@@ -492,17 +525,17 @@ class ALP(TrainerX):
         return self.train_loader_x, self.val_loader, self.test_loader
 
     def parse_batch_train(self, batch):
-
+        
         if isinstance(batch['img'], list):
             input = batch["img"]
             input = torch.stack(input)  # two views from dataloader
-            input = input.to(self.device)
+            input = input.to(self.device, non_blocking=True)
         else:
             input = batch['img']
-            input = input.to(self.device)
+            input = input.to(self.device, non_blocking=True)
 
         label = batch["label"]
-        label = label.to(self.device)
+        label = label.to(self.device, non_blocking=True)
         return input, label
 
     def parse_batch_test(self, batch):
@@ -594,6 +627,8 @@ class ALP(TrainerX):
 
     def build_topk_dataset(self, top_k_idxs, top_k_conf, top_k_pseudo):
         data = []
+        st = time.time()
+        print("Building TopK Dataset")
         for idx, conf, pseudo in zip(top_k_idxs, top_k_conf, top_k_pseudo):
             data.append({
                 'img': self.train_loader_x.dataset[idx]['img'],
@@ -601,22 +636,21 @@ class ALP(TrainerX):
                 'label_conf': conf,
                 'ground_labels': self.train_loader_x.dataset[idx]['label'],
             })
-        
+        print(f"Time taken to build TopK Dataset: {time.time()-st}")
         return TopKDataset1(data)
     
+
     def select_top_k(self, k):
         # if file exists, load the embeddings
         if os.path.isfile(f'embeddings/{self.cfg.DATASET.NAME}_total_emb.pt'):
             print('******** Loading Already Saved Averaged Text Embeddings *********')
             total_emb = torch.load(f'embeddings/{self.cfg.DATASET.NAME}_total_emb.pt')
-            top_k_idxs, top_k_conf, top_k_pseudo = top_k_indices_per_class2(total_emb, k)
-            self.top_k_idxs = top_k_idxs
-
-            # return TopKDataset(self.train_loader_x.dataset, top_k_idxs.cpu().numpy(), top_k_conf.cpu().numpy(), top_k_pseudo.cpu().numpy())
-            return self.build_topk_dataset(top_k_idxs.cpu().numpy(), top_k_conf.cpu().numpy(), top_k_pseudo.cpu().numpy())
-        
+            # top_k_idxs, top_k_conf, top_k_pseudo = top_k_indices_per_class2(total_emb, k)
+            # self.top_k_idxs = top_k_idxs
+            return DictDataset(total_emb)
+            # return TopKDataset(self.train_loader_x.dataset.data_source, self.val_loader.dataset.transform, top_k_idxs, top_k_conf, top_k_pseudo)
         # file_path = f'embeddings/{self.cfg.DATASET.NAME}_avg_text_emb.pt'
-
+        print("******** Generating Embeddings ********")
         text_emb =  self.model.avg_text_emb
 
         # Check if the file exists
@@ -633,7 +667,6 @@ class ALP(TrainerX):
         labels = []
         impaths = []
         train_loader = DataLoader(self.train_loader_x.dataset, batch_size=128, shuffle=False, num_workers=4)
-        self.model.eval()
         for batch in tqdm(train_loader):
             input = torch.stack(batch['img']).to(self.device)
             # vision_emb = self.model.image_features(input[0])
@@ -652,32 +685,63 @@ class ALP(TrainerX):
                 'labels':  torch.cat(labels),
             }
         
-        torch.save(emb_dict, f'embeddings/{self.cfg.DATASET.NAME}_total_emb.pt')
+        
         top_k_idxs, top_k_conf, top_k_pseudo = top_k_indices_per_class2(emb_dict, k)
         self.top_k_idxs = top_k_idxs
-
+        # forward pass on the taal encoder and save the embedings
+        # tr_dset = TopKDataset(self.train_loader_x.dataset.data_source, self.val_loader.dataset.transform, top_k_idxs, top_k_conf, top_k_pseudo)
+        tr_dset = TopKDataset(self.train_loader_x.dataset.data_source, self.test_loader.dataset.transform, top_k_idxs, top_k_conf, top_k_pseudo)
+        tr_loader = DataLoader(tr_dset, batch_size=32, shuffle=True, num_workers=8)
+        dino_emb = torch.empty((len(tr_dset), 768))
+        label = torch.empty(len(tr_dset), dtype=torch.long)
+        label_conf = torch.empty(len(tr_dset))
+        ground_truth = torch.empty(len(tr_dset), dtype=torch.long)
+        with torch.no_grad():
+            for i, batch in enumerate(tr_loader):
+                input, lbl = self.parse_batch_train(batch)
+                emb = self.model.taal.taal_enc(input)
+                dino_emb[i*32:(i+1)*32] = emb
+                label[i*32:(i+1)*32] = lbl
+                label_conf[i*32:(i+1)*32] = batch['label_conf']
+                ground_truth[i*32:(i+1)*32] = batch['ground_truth']
+        emb_dict['dino_emb'] = dino_emb
+        dict_to_save = {
+            'img': dino_emb,
+            'label': label,
+            'label_conf': label_conf,
+            'ground_truth': ground_truth,
+        }
+        torch.save(dict_to_save, f'embeddings/{self.cfg.DATASET.NAME}_total_emb.pt')
         # return TopKDataset(self.train_loader_x.dataset, top_k_idxs, top_k_conf, top_k_pseudo)
-        return self.build_topk_dataset(top_k_idxs.cpu().numpy(), top_k_conf.cpu().numpy(), top_k_pseudo.cpu().numpy())
+        # dataset class from dict
+        return DictDataset(dict_to_save)
     
-    def train_taal(self, cfg, train_loader):
+    def train_taal(self, train_loader):
         # setup train taal
+        st = time.time()
+
         optimizer = setup_train_taal(self.model.taal)
-        
+
         criterion = nn.CrossEntropyLoss()
         # train the adapter
         self.model.taal.train()
-        for epoch in tqdm(range(cfg.TAAL_EPOCHS)):
+        for epoch in tqdm(range(self.cfg.TAAL_EPOCHS)):
+            epoch_time = 0
             for i, batch in enumerate(train_loader):
                 input, label = self.parse_batch_train(batch)
                 optimizer.zero_grad()
-                output = self.model.taal(input[0])
+                st = time.time()
+                output = self.model.taal.taal_adt(input)
+                epoch_time += time.time()-st
                 loss = criterion(output, label)
                 loss.backward()
                 optimizer.step()
                 if self._writer:
                     self._writer.add_scalar("train/loss_taal", loss.item(), epoch * len(train_loader) + i)
-                # if i % 10 == 0:
+                # if i % 50 == 0:
                 #     print(f"Epoch: {epoch}, Batch: {i}, Loss: {loss.item()}")
+            print(f"Epoch: {epoch}, Time: {epoch_time}")
+        # print(f"Time taken to train TAAL: {time.time()-st}")        
 
     def test_taal(self, cfg):
         correct = 0
@@ -724,10 +788,10 @@ class ALP(TrainerX):
         return None
     
     def train(self, start_epoch=0, max_epoch=50, cfg=None):
-        print("************")
-        print("** Config **")
-        print("************")
-        print(cfg)
+        # print("************")
+        # print("** Config **")
+        # print("************")
+        # print(cfg)
 
 
         """Generic training loop with early stopping based on patience."""
@@ -739,7 +803,9 @@ class ALP(TrainerX):
         # self.init_writer(writer_dir)
         self.time_start = time.time()
 
-        k=256
+        nos_train = len(self.train_loader_x.dataset)
+        nos_classes = len(self.dm.dataset.classnames)
+        k=find_k(nos_train, nos_classes)
         print("************")
         print("** Setting k **", k)
         print("************")
@@ -747,7 +813,7 @@ class ALP(TrainerX):
 
         train_loader = DataLoader(top_k_dataset, batch_size=32, shuffle=True, num_workers=4)
 
-        self.train_taal(self.cfg, train_loader)
+        self.train_taal(train_loader)
         self.test_taal(self.cfg)    
 
 
@@ -756,11 +822,11 @@ class ALP(TrainerX):
         tr_loader, val_loader, te_loader = self.train_loader_x, self.val_loader, self.test_loader
 
         
-        print('------------------ Learnable Parameters in NoLA ------------------')
-        for key, value in self.model.named_parameters():
-            if value.requires_grad:
-                print("\t{}, {}, {}".format(key, value.numel(), value.shape))
-        print('----------------------------------------------------------')
+        # print('------------------ Learnable Parameters in NoLA ------------------')
+        # for key, value in self.model.named_parameters():
+        #     if value.requires_grad:
+        #         print("\t{}, {}, {}".format(key, value.numel(), value.shape))
+        # print('----------------------------------------------------------')
 
         # Initialize early stopping parameters
         early_stopping_counter = 0

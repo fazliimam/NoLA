@@ -108,6 +108,7 @@ def top_k_indices_per_class2(zero_shot_emb, k):
     top_k_values = torch.tensor(pseudo_df['prob1'].values)
     top_k_pseudo_labels = torch.tensor(pseudo_df['pred1'].values)
 
+    
     return top_k_original_indices.flatten(), top_k_values.flatten(), top_k_pseudo_labels.flatten()
 
 
@@ -387,7 +388,8 @@ def gen_labels_with_synonyms(classes, folder_path, args):
 def gen_labels_with_descrptions(classes, descriptions):
     desc_ = []
     labels = []
-    # classes = descriptions.keys() # uncomment this for sun397
+    if len(classes)==397:
+        classes = descriptions.keys() # uncomment this for sun397
     for i, classname in enumerate(classes):
         for desc in descriptions[classname]:
             desc_.append(desc)

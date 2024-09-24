@@ -11,3 +11,7 @@ embeddings/
 .vscode/
 output/*
 data/*
+logs/*
+Results/*
+scripts/*
+junk/*

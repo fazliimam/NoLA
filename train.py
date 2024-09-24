@@ -27,6 +27,7 @@ import datasets.aid
 import datasets.optimal31
 import datasets.mlrsnet
 import datasets.ucm
+from line_profiler import LineProfiler
 
 import trainers.ALP as ALP
 
@@ -51,14 +52,17 @@ def print_args(args, cfg):
     optkeys.sort()
     for key in optkeys:
         print("{}: {}".format(key, args.__dict__[key]))
-    print("************")
-    print("** Config **")
-    print("************")
-    print(cfg)
+    # print("************")
+    # print("** Config **")
+    # print("************")
+    # print(cfg)
+
+
 
 def main(cfg):
 
     setup_seed(cfg.SEED)
+    cfg.OUTPUT_DIR = 'Results'
     setup_logger(cfg.OUTPUT_DIR)
 
     if torch.cuda.is_available() and cfg.USE_CUDA:
@@ -66,7 +70,7 @@ def main(cfg):
     
     trainer = build_trainer(cfg)
     trainer.train(max_epoch=cfg.OPTIM.MAX_EPOCH, cfg=cfg)
-    trainer.test()
+    # trainer.test()
 
 
 if __name__ == "__main__":
@@ -88,6 +92,8 @@ if __name__ == "__main__":
     )
     parser.add_argument('--txt_cls', type=str, default='lafter', required=False, choices=['cls_only',
                                                                                       'templates_only', 'lafter', 'zero_shot'])
+
+    parser.add_argument("--output-dir", type=str, default="", help="output directory")
 
     parser.add_argument('--config', type=str, default='config.yml', required=False, help='config file')
     args = parser.parse_args()

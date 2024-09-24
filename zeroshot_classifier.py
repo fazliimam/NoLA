@@ -334,7 +334,8 @@ def gen_labels_with_templates(classes, descriptions):
 def gen_labels_with_descrptions(classes, descriptions):
     desc_ = []
     labels = []
-    # classes = descriptions.keys() # uncomment this for sun397
+    if len(classes) == 397:
+        classes = descriptions.keys() # uncomment this for sun397
     for i, classname in enumerate(classes):
         for desc in descriptions[classname]:
             desc_.append(desc)

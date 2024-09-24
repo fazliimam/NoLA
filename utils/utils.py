@@ -42,6 +42,12 @@ def setup_train_taal(model):
     optimizer = optim.AdamW(optimizer_grouped_parameters)
     return optimizer
 
+def find_k(nos_training_samples,nos_classes, percentage=0.2):
+    import math
+    k = math.floor((nos_training_samples/nos_classes) * percentage)
+    if k < 16:
+        k = 16
+    return k
 
 def setup_train_alp(model):
 
