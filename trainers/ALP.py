@@ -192,9 +192,9 @@ class ALP_RS(nn.Module):
         
         self.prompt_dropout = Dropout(0.0)
         self.clip_model = clip_model.to(cfg.DEVICE)
-        self.taal = Taal(num_classes=len(classes), templates=templates, device=cfg.DEVICE).to(self.device)
+        self.taal = Taal(num_classes=len(classes), templates=templates, device=cfg.DEVICE)
 
-        self.adapter = nn.Sequential(nn.Linear(int(self.backbone_out_size), len(classes), bias=False)).to(self.device)
+        self.adapter = nn.Sequential(nn.Linear(int(self.backbone_out_size), len(classes), bias=False))
 
         self.prompt_embeddings = nn.Parameter(torch.zeros(1, self.num_tokens, self.hidden_size), requires_grad=True)
         patch_size = (16, 16)
@@ -207,6 +207,7 @@ class ALP_RS(nn.Module):
         self.txt_features_for_text_cls, self.labels_for_text_cls = self.txt_features_for_text_cls()
         self.avg_text_emb = self.gen_emb2()  # Average text embeddings for each class
         # self.text_features = self.txt_features()
+        self.adapter[0].weight.data = self.avg_text_emb.T
 
     def txt_features_for_text_cls(self):
 
@@ -309,7 +310,6 @@ class ALP_RS(nn.Module):
         breakpoint()
         return other_tensor_split.T
 
-
     def gen_emb2(self):
         if os.path.isfile(f'embeddings/{self.txt_cls}_{self.dataset_name}.pt'):
             print('******** Loading Already Saved Averaged Text Embeddings *********')
@@ -369,15 +369,15 @@ class ALP_RS(nn.Module):
         with torch.no_grad():
             img_features_2 = self.incorporate_prompt(x)
             img_features_2 = self.embeddings_after_prompts(img_features_2)
-            zs_emb = img_features_2 @ self.avg_text_emb
+            zs_emb = self.adapter(img_features_2)
         return zs_emb
 
-    def forward(self, x):
-        # only used for 0-shot-eval
-        with torch.no_grad():
-            img_features = self.image_features(x)
-            pseudo_label = img_features.to(self.avg_text_emb.device) @ self.avg_text_emb
-        return pseudo_label
+    # def forward(self, x):
+    #     # only used for 0-shot-eval
+    #     with torch.no_grad():
+    #         img_features = self.image_features(x)
+    #         pseudo_label = img_features.to(self.avg_text_emb.device) @ self.avg_text_emb
+    #     return pseudo_label
 
     def forward_aug_with_prompts(self, x2):
         '''
@@ -444,17 +444,32 @@ class ALP(TrainerX):
 
     def setup_optim(self):
         params = []
+        for key, value in self.model.named_parameters():
+            if value.requires_grad:
+                print("\t{}, {}, {}".format(key, value.numel(), value.shape))
+        # breakpoint()
         for k, v in self.model.named_parameters():
+            v.requires_grad = False
             if 'prompt_embeddings' in k:
                 v.requires_grad = True
                 params.append((k,v))
             
-            if 'ln' in k and 'visual' in k:
+            if 'visual' in k:
+                if 'ln' in k or 'bn' in k:
+                    v.requires_grad = True
+                    params.append((k,v))
+
+            if 'adapter' in k:
                 v.requires_grad = True
                 params.append((k,v))
-            else:
-                v.requires_grad = False
-
+            
+            if 'taal_adt' in k:
+                v.requires_grad = True
+            #     # params.append((k,v))
+        for key, value in self.model.named_parameters():
+            if value.requires_grad:
+                print("\t{}, {}, {}".format(key, value.numel(), value.shape))
+        # breakpoint()
         no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
 
               
@@ -474,14 +489,14 @@ class ALP(TrainerX):
     
     def build_model(self):
         cfg = self.cfg
+        self.patience = 25
         classnames = self.dm.dataset.classnames
         dset = cfg.DATASET.NAME
         print("**********************Dataset: ", dset)
         #TO BE FIXED
-        if 'AnnualCrop' in classnames:
-            # breakpoint()
-            classnames = ['Annual Crop Land', 'Forest', 'Herbaceous Vegetation Land', 'Highway or Road', 'Industrial Buildings', 'Pasture Land', 'Permanent Crop Land', 'Residential Buildings', 'River', 'Sea or Lake']
-
+        # if 'AnnualCrop' in classnames:
+        #     # breakpoint()
+        #     classnames = ['Annual Crop Land', 'Forest', 'Herbaceous Vegetation Land', 'Highway or Road', 'Industrial Buildings', 'Pasture Land', 'Permanent Crop Land', 'Residential Buildings', 'River', 'Sea or Lake']
         print(f"Loading CLIP (backbone: {cfg.MODEL.BACKBONE.NAME})")
         clip_model = load_clip_to_cpu(cfg.MODEL.BACKBONE.NAME)
         if cfg.TRAINER.COOP.PREC == "fp32" or cfg.TRAINER.COOP.PREC == "amp":
@@ -494,14 +509,9 @@ class ALP(TrainerX):
         self.model = ALP_RS(clip_model=clip_model, classes=classnames,
                                           templates=[text_pr], ds_templates = ds_specific_templates[cfg.DATASET.NAME], cfg=cfg)
         
-        self.register_model("adapt", self.model)
-
-        for k,v in self.model.clip_model.named_parameters():
-            v.requires_grad = False
-
-        # self.optim, self.scheduler, self.criterion = self.setup_optim() 
-
-        # self.register_model("adapt", self.model, self.optim, self.scheduler)
+        self.model = self.model.to(self.device)
+        self.optim, self.scheduler, self.criterion = self.setup_optim()
+        self.register_model("adapt", self.model, self.optim, self.scheduler)
 
     def build_data_loader(self):
         """Create essential data-related attributes.
@@ -575,42 +585,69 @@ class ALP(TrainerX):
             if "token_suffix" in state_dict:
                 del state_dict["token_suffix"]
 
-            print("Loading weights to {} " 'from "{}" (epoch = {})'.format(name, model_path, epoch))
+            print("Loading weights to {} " 'from "{}" (epoch = {}) with acc {}'.format(name, model_path, epoch, checkpoint['val_result']))
             # set strict=False
-            self._models[name].load_state_dict(state_dict, strict=False)
+            self._models[name].load_state_dict(state_dict, strict=True)
+            # self._models[name].to(self.device)
     
-    # def before_train(self):
+    def before_train(self):
 
-    #     # Initialize summary writer
-    #     writer_dir = osp.join(self.output_dir, "tensorboard")
-    #     os.makedirs(writer_dir, exist_ok=True)
-    #     self.init_writer(writer_dir)
+        # Initialize summary writer
+        writer_dir = osp.join(self.output_dir, "tensorboard")
+        os.makedirs(writer_dir, exist_ok=True)
+        self.init_writer(writer_dir)
 
-    #     # if self.cfg.STAGE == 'train_alp':
-    #     #     return
+        # if self.cfg.STAGE == 'train_alp':
+        #     return
         
-    #     # Remember the starting time (for computing the elapsed time)
-    #     self.time_start = time.time()
+        # Remember the starting time (for computing the elapsed time)
+        self.time_start = time.time()
 
-    #     # get top_k dataset
-    #     top_k_dataset = self.select_top_k(k=16)
+        nos_train = len(self.train_loader_x.dataset)
+        nos_classes = len(self.dm.dataset.classnames)
+        k=find_k(nos_train, nos_classes)
 
-    #     # train taal using top_k dataset
-    #     train_loader = DataLoader(top_k_dataset, batch_size=32, shuffle=True, num_workers=4)
+        # get top_k dataset
+        top_k_dataset = self.select_top_k(k=k)
 
-    #     self.train_taal(self.cfg, train_loader)
-    #     self.test_taal(self.cfg)    
+        # train taal using top_k dataset
+        train_loader = DataLoader(top_k_dataset, batch_size=32, shuffle=True, num_workers=4)
 
-    #     self.model = setup_train_alp(self.model)
+        self.train_taal(train_loader)
+        self.test_taal()    
+
+        # freeze taal network
+        for k, v in self.model.named_parameters():
+
+            if 'prompt_embeddings' in k:
+                v.requires_grad = True
+
+            if 'taal' in k:
+                v.requires_grad = False
+            
+            if 'adapter' in k:
+                v.requires_grad = True
+            
+            if 'visual' in k and ('ln' in k or 'bn' in k):
+                v.requires_grad = True
+
+
+
+        # self.model = setup_train_alp(self.model)
 
     def forward_backward(self, batch_x):
 
-        input_x, label_x = self.parse_batch_train(batch_x)
+        # for key, value in self.model.named_parameters():
+        #     if value.requires_grad:
+        #         print("\t{}, {}, {}".format(key, value.numel(), value.shape))
 
-        pl = self.model.taal(input_x[0])
-        pseudo_label = F.softmax(pl, dim=-1)  # / 0.04
-        pseudo_label = pseudo_label.argmax(dim=1, keepdim=True)
-        pseudo_label = pseudo_label.flatten()
+        input_x, label_x = self.parse_batch_train(batch_x)
+        self.model.eval()
+        self.model.adapter.train()
+        with torch.no_grad():
+            pl = self.model.taal(input_x[0].float())
+            pseudo_label = F.softmax(pl, dim=-1)  # / 0.04
+            pseudo_label = pseudo_label.argmax(dim=1, keepdim=True).flatten()
 
         output_x = self.model.forward_aug_with_prompts(input_x[1].float())
         loss_x = self.criterion(output_x.squeeze(), pseudo_label)
@@ -639,7 +676,6 @@ class ALP(TrainerX):
         print(f"Time taken to build TopK Dataset: {time.time()-st}")
         return TopKDataset1(data)
     
-
     def select_top_k(self, k):
         # if file exists, load the embeddings
         if os.path.isfile(f'embeddings/{self.cfg.DATASET.NAME}_total_emb.pt'):
@@ -719,12 +755,11 @@ class ALP(TrainerX):
     def train_taal(self, train_loader):
         # setup train taal
         st = time.time()
-
-        optimizer = setup_train_taal(self.model.taal)
-
+        optimizer = torch.optim.Adam(self.model.taal.taal_adt.parameters())
         criterion = nn.CrossEntropyLoss()
         # train the adapter
-        self.model.taal.train()
+        self.model.taal.eval()
+        self.model.taal.taal_adt.train()
         for epoch in tqdm(range(self.cfg.TAAL_EPOCHS)):
             epoch_time = 0
             for i, batch in enumerate(train_loader):
@@ -743,7 +778,7 @@ class ALP(TrainerX):
             print(f"Epoch: {epoch}, Time: {epoch_time}")
         # print(f"Time taken to train TAAL: {time.time()-st}")        
 
-    def test_taal(self, cfg):
+    def test_taal(self):
         correct = 0
         total = 0
         self.model.taal.eval()
@@ -757,11 +792,9 @@ class ALP(TrainerX):
         if self._writer:
             self._writer.add_scalar("test/accuracy_taal", 100 * correct / total, 0)
         print(f'Accuracy of the network on the {total} test images: {100 * correct / total}')
-
-    def model_inference(self, input):
-        return self.model.eval_clip(input)
-
+    
     def after_epoch(self):
+
         last_epoch = (self.epoch + 1) == self.max_epoch
         do_test = not self.cfg.TEST.NO_TEST
         meet_checkpoint_freq = (
@@ -774,115 +807,134 @@ class ALP(TrainerX):
             is_best = curr_result > self.best_result
             if is_best:
                 self.best_result = curr_result
+                self.test()
                 self.save_model(
                     self.epoch,
                     self.output_dir,
                     val_result=curr_result,
                     model_name="model-best.pth.tar"
                 )
-            return curr_result
+                self.patience = 15
+            else:
+                self.patience -= 1
+                if self.patience == 0:
+                    print("Early stopping the training")
+                    
+                    sys.exit(0)
 
         if meet_checkpoint_freq or last_epoch:
             self.save_model(self.epoch, self.output_dir)
 
-        return None
-    
-    def train(self, start_epoch=0, max_epoch=50, cfg=None):
-        # print("************")
-        # print("** Config **")
-        # print("************")
-        # print(cfg)
+    # def train(self, start_epoch=0, max_epoch=50, cfg=None):
+    #     # print("************")
+    #     # print("** Config **")
+    #     # print("************")
+    #     # print(cfg)
 
 
-        """Generic training loop with early stopping based on patience."""
-        self.start_epoch = start_epoch
-        self.max_epoch = max_epoch
+    #     """Generic training loop with early stopping based on patience."""
+    #     self.start_epoch = start_epoch
+    #     self.max_epoch = max_epoch
 
-        # writer_dir = osp.join(self.output_dir, "tensorboard")
-        # os.makedirs(writer_dir, exist_ok=True)
-        # self.init_writer(writer_dir)
-        self.time_start = time.time()
+    #     # writer_dir = osp.join(self.output_dir, "tensorboard")
+    #     # os.makedirs(writer_dir, exist_ok=True)
+    #     # self.init_writer(writer_dir)
+    #     self.time_start = time.time()
 
-        nos_train = len(self.train_loader_x.dataset)
-        nos_classes = len(self.dm.dataset.classnames)
-        k=find_k(nos_train, nos_classes)
-        print("************")
-        print("** Setting k **", k)
-        print("************")
-        top_k_dataset = self.select_top_k(k)
+    #     nos_train = len(self.train_loader_x.dataset)
+    #     nos_classes = len(self.dm.dataset.classnames)
+    #     k=find_k(nos_train, nos_classes)
+    #     print("************")
+    #     print("** Setting k **", k)
+    #     print("************")
+    #     top_k_dataset = self.select_top_k(k)
 
-        train_loader = DataLoader(top_k_dataset, batch_size=32, shuffle=True, num_workers=4)
+    #     train_loader = DataLoader(top_k_dataset, batch_size=32, shuffle=True, num_workers=4)
 
-        self.train_taal(train_loader)
-        self.test_taal(self.cfg)    
+    #     self.train_taal(train_loader)
+    #     self.test_taal()    
 
 
-        # self.model = setup_train_alp(self.model)
-        optimizer, scheduler, criteria = setup_train_nola(self.model, lrate=self.cfg.OPTIM.LR)
-        tr_loader, val_loader, te_loader = self.train_loader_x, self.val_loader, self.test_loader
+    #     # self.model = setup_train_alp(self.model)
+    #     optimizer, scheduler, criteria = setup_train_nola(self.model, lrate=self.cfg.OPTIM.LR)
+    #     tr_loader, val_loader, te_loader = self.train_loader_x, self.val_loader, self.test_loader
 
         
-        # print('------------------ Learnable Parameters in NoLA ------------------')
-        # for key, value in self.model.named_parameters():
-        #     if value.requires_grad:
-        #         print("\t{}, {}, {}".format(key, value.numel(), value.shape))
-        # print('----------------------------------------------------------')
+    #     # print('------------------ Learnable Parameters in NoLA ------------------')
+    #     # for key, value in self.model.named_parameters():
+    #     #     if value.requires_grad:
+    #     #         print("\t{}, {}, {}".format(key, value.numel(), value.shape))
+    #     # print('----------------------------------------------------------')
 
-        # Initialize early stopping parameters
-        early_stopping_counter = 0
-        early_stopping_threshold = 15
-        best_acc = 0.0
+    #     # Initialize early stopping parameters
+    #     early_stopping_counter = 0
+    #     early_stopping_threshold = 15
+    #     best_acc = 0.0
 
-        if self.model.prompt_embeddings.requires_grad:
-            print("Prompt embeddings are trainable.")
+    #     if self.model.prompt_embeddings.requires_grad:
+    #         print("Prompt embeddings are trainable.")
 
-        for epoch in range(start_epoch, max_epoch):
+    #     for epoch in range(start_epoch, max_epoch):
+    #         # self.model.eval()
+    #         # self.model.adapter.train()
+    #         for i, batch in tqdm(enumerate(tr_loader), total=len(tr_loader)):
+    #             input = batch["img"]
+    #             input = torch.stack(input)  # two views from dataloader
+    #             input = input.to(self.model.device)
 
-            for i, batch in tqdm(enumerate(tr_loader), total=len(tr_loader)):
-                input = batch["img"]
-                input = torch.stack(input)  # two views from dataloader
-                input = input.to(self.model.device)
+    #             optimizer.zero_grad()
+    #             with torch.no_grad():
+    #                 pl = self.model.taal(input[0])
+    #                 pseudo_label = F.softmax(pl, dim=-1)  # / 0.04
+    #                 pseudo_label = pseudo_label.argmax(dim=1, keepdim=True)
+    #                 pseudo_label = pseudo_label.flatten()
 
-                optimizer.zero_grad()
-                with torch.no_grad():
-                    pl = self.model.taal(input[0])
-                    pseudo_label = F.softmax(pl, dim=-1)  # / 0.04
-                    pseudo_label = pseudo_label.argmax(dim=1, keepdim=True)
-                    pseudo_label = pseudo_label.flatten()
-
-                output_x = self.model.forward_aug_with_prompts(input[1].float())
-                loss = criteria(output_x.squeeze(), pseudo_label)
+    #             output_x = self.model.forward_aug_with_prompts(input[1].float())
+    #             loss = criteria(output_x.squeeze(), pseudo_label)
                     
-                loss.backward()
-                optimizer.step()
-            scheduler.step()
-            try:
-                val_acc = test_prompting(val_loader, self.model)
-            except:
-                val_acc = test_prompting(te_loader, self.model)
+    #             loss.backward()
+    #             optimizer.step()
+    #         scheduler.step()
+            
+    #         val_acc = self.test(split="val")
 
-            print(f'Validation Accuracy: {val_acc} at epoch {epoch}')
+    #         print(f'Validation Accuracy: {val_acc} at epoch {epoch}')
 
-            if val_acc>best_acc:
-                best_acc=val_acc
-                early_stopping_counter = 0
-                best_test_acc = test_prompting(te_loader, self.model)
-                print("Best Epoch ", epoch)
-                print("Best Val acc", val_acc)
-                print("Test acc ", best_test_acc)
+    #         if val_acc>best_acc:
+    #             best_acc=val_acc
+    #             early_stopping_counter = 0
+    #             # best_test_acc = test_prompting(te_loader, self.model)
+    #             best_test_acc = self.test()
+    #             print("Best Epoch ", epoch)
+    #             print("Best Val acc", val_acc)
+    #             print("Test acc ", best_test_acc)
+    #             # self.save_model(epoch, self.output_dir, val_result=val_acc, model_name="model-best.pth.tar")
+    #             to_save = {
+    #                 'state_dict': self.model.state_dict(),
+    #                 'epoch': epoch,
+    #                 'optimizer': optimizer.state_dict(),
+    #                 'scheduler': scheduler.state_dict(),
+    #                 'val_result': val_acc,
+    #             }
+    #             if not os.path.exists(osp.join(self.output_dir, 'adapt')):
+    #                 os.makedirs(osp.join(self.output_dir, 'adapt'))
+    #             torch.save(to_save, osp.join(self.output_dir, 'adapt', 'model-best.pth.tar'))
 
-            else:
-                early_stopping_counter += 1
+    #         else:
+    #             early_stopping_counter += 1
 
-            if early_stopping_counter == early_stopping_threshold:
-                print(f'Early stopping at epoch {epoch} due to no improvement in validation accuracy.')
-                break
+    #         if early_stopping_counter == early_stopping_threshold:
+    #             print(f'Early stopping at epoch {epoch} due to no improvement in validation accuracy.')
+    #             break
 
-            print('------------')
+    #         print('------------')
    
 
-        # self.after_train()
+    #     # self.after_train()
 
+    def model_inference(self, input):
+        outputs = self.model.eval_clip(input)
+        return outputs
 
 
 

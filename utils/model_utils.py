@@ -80,6 +80,26 @@ def top_k_indices_per_class2(zero_shot_emb, k):
     print('Correct predictions percentage: ', df['correct'].mean())
     pseudo_df = pd.DataFrame()
 
+    # Create a new DataFrame with unique pred1 values and their counts
+    
+    # pred1_counts_df = df['pred1'].value_counts().reset_index()
+    # pred1_counts_df.columns = ['pred1', 'count']
+    # all_labels_predicted_labels = set(pred1_counts_df.pred1)
+    # elements_not_in_pred1 = set(df.labels)-all_labels_predicted_labels
+    # labels_list = list(elements_not_in_pred1)
+    # for ele in pred1_counts_df.pred1:
+    #     labels_list.append(ele)
+
+
+    # # Create a new DataFrame with unique pred1 values and their counts
+    # pred1_avg_prob1_df = df.groupby('pred1')['prob1'].mean().reset_index()
+    # pred1_avg_prob1_df.columns = ['pred1', 'avg_prob1']
+    # pred1_avg_prob1_df = pred1_avg_prob1_df.sort_values('avg_prob1', ascending=True).reset_index(drop=True)
+    # all_labels_predicted_labels = set(pred1_avg_prob1_df.pred1)
+    # elements_not_in_pred1 = set(df.labels)-all_labels_predicted_labels
+    # labels_list = list(elements_not_in_pred1)
+    # for ele in pred1_avg_prob1_df.pred1:
+    #     labels_list.append(ele)
 
     for pred_label in set(df.labels):
         sub_label_df = df.loc[(df.pred1 == pred_label)]

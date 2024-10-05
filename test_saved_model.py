@@ -45,25 +45,24 @@ def setup_seed(seed):
     torch.backends.cudnn.deterministic = True
 
 def print_args(args, cfg):
-    # print("***************")
-    # print("** Arguments **")
-    # print("***************")
-    # optkeys = list(args.__dict__.keys())
-    # optkeys.sort()
-    # for key in optkeys:
-    #     print("{}: {}".format(key, args.__dict__[key]))
+    print("***************")
+    print("** Arguments **")
+    print("***************")
+    optkeys = list(args.__dict__.keys())
+    optkeys.sort()
+    for key in optkeys:
+        print("{}: {}".format(key, args.__dict__[key]))
     print("************")
     print("** Config **")
-    print(cfg)
     print("************")
+    print(cfg)
 
 
 
 def main(cfg):
 
-    print_args(args, cfg)
     setup_seed(cfg.SEED)
-    cfg.OUTPUT_DIR = f'Output_dassl_fixed_imagenet/{cfg.DATASET.NAME}'
+    cfg.OUTPUT_DIR = f"Output/{cfg.DATASET.NAME}"
 
     if not os.path.exists(cfg.OUTPUT_DIR):
         os.makedirs(cfg.OUTPUT_DIR)
@@ -74,8 +73,10 @@ def main(cfg):
         torch.backends.cudnn.benchmark = True
     
     trainer = build_trainer(cfg)
-    trainer.train()
+    # trainer.test_saved_model()
+    trainer.load_model(cfg.OUTPUT_DIR)
     trainer.test()
+
 
 
 if __name__ == "__main__":
@@ -86,8 +87,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dataset-config-file",
         type=str,
-        default="configs/datasets/imagenet.yaml",
-        required=True,
+        required=False,
+        default="configs/datasets/eurosat.yaml",
         help="path to config file for dataset setup",
     )
     parser.add_argument(

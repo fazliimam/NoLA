@@ -1,6 +1,0 @@
-MODEL:
-  BACKBONE:
-    NAME: "GeoRSCLIP_l_14"
-
-TRAINER:
-  NAME: 'ALP'
