@@ -2,4 +2,4 @@ MODEL:
   BACKBONE:
     NAME: "ViT-L/14"
 TRAINER:
-  NAME: 'ALP'
+  NAME: 'NoLA'

@@ -86,12 +86,12 @@ class Taal(nn.Module):
         self.taal_enc.head = nn.Identity()
         self.taal_enc.eval()
         in_features = self.taal_enc.cls_token.shape[-1]
-        self.taal_adt = AdapterMLP(num_classes=num_classes, input_size=in_features, hidden_size=256)
+        self.taal_h_module = AdapterMLP(num_classes=num_classes, input_size=in_features, hidden_size=256)
 
     def forward(self, x):
         with torch.no_grad():
             op = self.taal_enc(x)
-        op = self.taal_adt(op)
+        op = self.taal_h_module(op)
         return op
     
 class AdapterMLP(nn.Module):
@@ -134,7 +134,7 @@ class NoLAUFT(nn.Module):
         self.clip_model = clip_model.to(cfg.DEVICE)
         self.taal = Taal(num_classes=len(classes), templates=templates, device=cfg.DEVICE)
 
-        self.adapter = nn.Sequential(nn.Linear(int(self.backbone_out_size), len(classes), bias=False))
+        self.cde_adapter = nn.Sequential(nn.Linear(int(self.backbone_out_size), len(classes), bias=False))
 
         self.prompt_embeddings = nn.Parameter(torch.zeros(1, self.num_tokens, self.hidden_size), requires_grad=True)
         patch_size = (16, 16)
@@ -142,7 +142,7 @@ class NoLAUFT(nn.Module):
         nn.init.uniform_(self.prompt_embeddings.data, -val, val)
       
         self.avg_text_emb = self.gen_emb()  # Average text embeddings for each class
-        self.adapter[0].weight.data = self.avg_text_emb.T
+        self.cde_adapter[0].weight.data = self.avg_text_emb.T
 
         
     def gen_emb(self):
@@ -190,7 +190,7 @@ class NoLAUFT(nn.Module):
         with torch.no_grad():
             img_features_2 = self.incorporate_prompt(x)
             img_features_2 = self.embeddings_after_prompts(img_features_2)
-            zs_emb = self.adapter(img_features_2)
+            zs_emb = self.cde_adapter(img_features_2)
         return zs_emb
 
     # def forward(self, x):
@@ -207,7 +207,7 @@ class NoLAUFT(nn.Module):
         '''
         img_features_2 = self.incorporate_prompt(x2)
         img_features_2 = self.embeddings_after_prompts(img_features_2)
-        img_features_adapter = self.adapter(img_features_2)
+        img_features_adapter = self.cde_adapter(img_features_2)
         return img_features_adapter
 
     def forward_with_text_desc(self, image, text_desc_emb):
@@ -259,9 +259,9 @@ class NoLA(TrainerX):
 
     def setup_optim(self):
         params = []
-        for key, value in self.model.named_parameters():
-            if value.requires_grad:
-                print("\t{}, {}, {}".format(key, value.numel(), value.shape))
+        # for key, value in self.model.named_parameters():
+        #     if value.requires_grad:
+        #         print("\t{}, {}, {}".format(key, value.numel(), value.shape))
         for k, v in self.model.named_parameters():
             v.requires_grad = False
             if 'prompt_embeddings' in k:
@@ -273,15 +273,15 @@ class NoLA(TrainerX):
                     v.requires_grad = True
                     params.append((k,v))
 
-            if 'adapter' in k:
+            if 'cde_adapter' in k:
                 v.requires_grad = True
                 params.append((k,v))
             
-            if 'taal_adt' in k:
+            if 'taal_h_module' in k:
                 v.requires_grad = True
-        for key, value in self.model.named_parameters():
-            if value.requires_grad:
-                print("\t{}, {}, {}".format(key, value.numel(), value.shape))
+        # for key, value in self.model.named_parameters():
+        #     if value.requires_grad:
+        #         print("\t{}, {}, {}".format(key, value.numel(), value.shape))
         no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
 
               
@@ -429,7 +429,7 @@ class NoLA(TrainerX):
             if 'taal' in k:
                 v.requires_grad = False
             
-            if 'adapter' in k:
+            if 'cde_adapter' in k:
                 v.requires_grad = True
             
             if 'visual' in k and ('ln' in k or 'bn' in k):
@@ -440,7 +440,7 @@ class NoLA(TrainerX):
 
         input_x, label_x = self.parse_batch_train(batch_x)
         self.model.eval()
-        self.model.adapter.train()
+        self.model.cde_adapter.train()
         with torch.no_grad():
             pl = self.model.taal(input_x[0].float())
             pseudo_label = F.softmax(pl, dim=-1)  # / 0.04
@@ -522,18 +522,18 @@ class NoLA(TrainerX):
     def train_taal(self, train_loader):
         # setup train taal
         st = time.time()
-        optimizer = torch.optim.Adam(self.model.taal.taal_adt.parameters())
+        optimizer = torch.optim.Adam(self.model.taal.taal_h_module.parameters())
         criterion = nn.CrossEntropyLoss()
-        # train the adapter
+        # train the alignment module h
         self.model.taal.eval()
-        self.model.taal.taal_adt.train()
+        self.model.taal.taal_h_module.train()
         for epoch in tqdm(range(self.cfg.TAAL_EPOCHS)):
             epoch_time = 0
             for i, batch in enumerate(train_loader):
                 input, label = self.parse_batch_train(batch)
                 optimizer.zero_grad()
                 st = time.time()
-                output = self.model.taal.taal_adt(input)
+                output = self.model.taal.taal_h_module(input)
                 epoch_time += time.time()-st
                 loss = criterion(output, label)
                 loss.backward()

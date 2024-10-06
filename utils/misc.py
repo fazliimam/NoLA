@@ -19,7 +19,7 @@ def extend_cfg(cfg):
 
     cfg.DATASET.SUBSAMPLE_CLASSES = "all"  # all, base or new
 
-    cfg.txt_cls = 'lafter'
+    cfg.txt_cls = 'cdte'
     cfg.DEVICE = 'cuda'
     cfg.NUM_TOKENS = 16 # number of  learnable tokens
     cfg.TAAL_EPOCHS = 50

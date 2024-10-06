@@ -15,32 +15,6 @@ import random
 from pathlib import Path
 
 
-lafter_datasets = ['DescribableTextures', 'OxfordPets' ,'EuroSAT','AID', 
-                   'PatternNet', 'OxfordFlowers', 'SUN397','RESISC45','UCM',
-                   'WHURS19','MLRSNet','Optimal31', 'UCF101', 'ImageNetR', 
-                   'ImageNetSketch', 'Stanford-Cars'
-                   'ImageNetA', 'CIFAR10_local', 'CIFAR100_local', 'ImageNet', 'Caltech101']
-
-def setup_train_taal(model):
-    params = list()
-    
-    for key, value in model.named_parameters():
-        if 'taal_enc' in key:
-            value.requires_grad = False
-        else:
-            value.requires_grad = True
-            params.append((key, value))
-
-#  print trainable parameters
-    for name, param in model.named_parameters():
-        if param.requires_grad:
-            print(name)
-
-    optimizer_grouped_parameters = [
-        {'params': [p for n, p in params if p.requires_grad]}
-    ]
-    optimizer = optim.AdamW(optimizer_grouped_parameters)
-    return optimizer
 
 def find_k(nos_training_samples,nos_classes, percentage=0.2):
     import math
@@ -48,83 +22,6 @@ def find_k(nos_training_samples,nos_classes, percentage=0.2):
     if k < 16:
         k = 16
     return k
-
-def setup_train_alp(model):
-
-    device_count = torch.cuda.device_count()
-    if device_count > 1:
-        print(f"Multiple GPUs detected (n_gpus={device_count}), use all of them!")
-        model = nn.DataParallel(model)
-
-    #copy averaged text embeddings to adapter
-    model.adapter.weight.data=model.avg_text_emb.T
-    
-    
-    for k,v in model.named_parameters():
-        if 'prompt_embeddings' in k:
-            v.requires_grad = True
-
-        if 'taal' in k:
-            v.requires_grad = False
-        
-        if 'adapter' in k:
-            v.requires_grad = True
-
-    
-    print('------------------ Learnable Parameters for ALP training------------------')
-    for key, value in model.named_parameters():
-        if value.requires_grad:
-            print("\t{}, {}, {}".format(key, value.numel(), value.shape))
-    print('----------------------------------------------------------')
-
-    return model
-
-
-def setup_train_nola(model, lrate):
-    model = model.cuda()
-    model = model.float()
-    params = list()
-    model.adapter[0].weight.data=model.avg_text_emb.T
-
-    for key, value in model.named_parameters():
-        value.requires_grad = False
-        
-        if 'prompt_embeddings' in key:
-            value.requires_grad = True
-        if 'adapter' in key:
-            value.requires_grad = True
-        if 'visual'in key and 'ln' in key:
-            value.requires_grad = True
-        if 'taal' in key:
-            value.requires_grad = False
-        
-    for key, value in model.named_parameters():
-        if 'visual' in key:
-            if 'ln' in key or 'bn' in key:
-                value.requires_grad = True
-
-    # print('------------------ Learnable Parameters in NoLA ------------------')
-    for key, value in model.named_parameters():
-        if value.requires_grad:
-            # print("\t{}, {}, {}".format(key, value.numel(), value.shape))
-            params.append((key, value))
-    # print('----------------------------------------------------------')
-
-    no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
-    optimizer_grouped_parameters = [
-        {'params': [p for n, p in params
-                    if not any(nd in n for nd in no_decay)],
-         'weight_decay': 0.01},
-        {'params': [p for n, p in params
-                    if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
-    ]
-
-    optimizer = optim.AdamW(optimizer_grouped_parameters, lrate, betas=(0.9, 0.999))
-    scheduler = optim.lr_scheduler.MultiStepLR(optimizer, None, 0.20)
-    criteria = LabelSmoothingCrossEntropy()
-
-    return optimizer, scheduler, criteria
-
 
 
 def test_prompting(teloader, model,model_path=None):
@@ -238,34 +135,6 @@ def test_prompting_save_file(teloader, model,model_path=None):
     model.eval()
     return top1.avg * 100
 
-text_cls_epochs = {
-    'DescribableTextures': 400, # 5.5k for txt_cls
-    'EuroSAT': 400,
-    'AID': 400,
-    'RESISC45': 400,
-    'Optimal31': 400,
-    'WHURS19': 400,
-    'UCM': 400,
-    'MLRSNet': 400,
-    'PatternNet': 400,
-    'FGVCAircraft': 500,
-    'Food101': 400,
-    'CIFAR10_local': 400,
-    'CIFAR100_local': 400, # 4k for txt_cls
-    'ImageNet': 500,
-    'OxfordFlowers': 600, # 600 for txt_cls
-    'OxfordPets': 400, # 600 for txt_cls
-    'Stanford-Cars': 400, # 600 for txt_cls
-    'SUN397': 500, # 2k for txt_cls
-    'UCF101': 400,
-    'ImageNetR': 500, # 4k for txt_cls
-    'ImageNetA': 500, # 4k for txt_cls
-    'ImageNetSketch': 500, # 4k for txt_cls
-    'Caltech101': 500, # 4k for txt_cls
-}
-
-def setup_txt_epochs(args, dataset):
-    args.txt_epochs = text_cls_epochs[dataset]
 
 
 def get_env_id():
@@ -397,7 +266,7 @@ def save_embeddings(loader, model, save_path):
     with torch.no_grad():
         for i, inputs in enumerate(loader):
             # target = inputs['label']
-            class_names = [path.split('/')[-2] for path in inputs['impath']] #impath is  '/l/users/sanoojan.baliah/Felix/RS_zero_shot/data/aid/AID/StorageTanks/storagetanks_166.jpg'
+            class_names = [path.split('/')[-2] for path in inputs['impath']] 
             images = inputs['img']
             if isinstance(images, list):
                 images = images[0]

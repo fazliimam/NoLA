@@ -9,27 +9,15 @@ from utils.utils import *
 from utils.misc import setup_cfg
 # custom
 import datasets.oxford_flowers
-import datasets.fgvc_aircraft
 import datasets.dtd
 import datasets.eurosat
-import datasets.aid
-import datasets.food101
 import datasets.sun397
 import datasets.ucf101
-import datasets.imagenet_r
 import datasets.imagenet
-import datasets.imagenet_s
-import datasets.imagenet_a
 import datasets.caltech101
 import datasets.cifar
 import datasets.resisc45
-import datasets.aid
-import datasets.optimal31
-import datasets.mlrsnet
-import datasets.ucm
-from line_profiler import LineProfiler
-
-import trainers.ALP as ALP
+import trainers.NoLA as NoLA
 
 import os
 # os.environ['CUDA_VISIBLE_DEVICES'] = '2'  # Use the first GPU
@@ -96,8 +84,8 @@ if __name__ == "__main__":
         nargs=argparse.REMAINDER,
         help="modify config options using the command-line",
     )
-    parser.add_argument('--txt_cls', type=str, default='lafter', required=False, choices=['cls_only',
-                                                                                      'templates_only', 'lafter', 'zero_shot'])
+    parser.add_argument('--txt_cls', type=str, default='cdte', required=False, choices=['cls_only',
+                                                                                      'templates_only', 'cdte', 'zero_shot'])
 
 
     parser.add_argument('--config', type=str, default='config.yml', required=False, help='config file')

@@ -29,7 +29,7 @@ import datasets.mlrsnet
 import datasets.ucm
 from line_profiler import LineProfiler
 
-import trainers.ALP as ALP
+import trainers.NoLA as NoLA
 
 import os
 # os.environ['CUDA_VISIBLE_DEVICES'] = '2'  # Use the first GPU
