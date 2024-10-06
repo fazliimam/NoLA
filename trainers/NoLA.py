@@ -151,6 +151,7 @@ class NoLAUFT(nn.Module):
             return torch.load(f'embeddings/{self.txt_cls}_{self.dataset_name}.pt')
         
         path_to_file = f'./descriptions/generic/{self.dataset_name}.json'
+        
         print(path_to_file)
         with open(path_to_file) as f:
             gpt3_prompts = json.load(f)
