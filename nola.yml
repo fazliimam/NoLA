@@ -1,4 +1,4 @@
-name: alp_rs
+name: nola
 channels:
   - conda-forge
   - pytorch

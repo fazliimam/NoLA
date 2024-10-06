@@ -18,3 +18,9 @@ junk/*
 Output*/*
 Output*/*
 all_outputs/*
+train_mul*
+test_saved*
+dockerfile
+ReadME.md
+zeroshot*
+installation.txt
