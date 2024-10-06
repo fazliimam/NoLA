@@ -36,7 +36,7 @@ The code for generating these descriptions is also provided in the `descriptions
 
 ## Experiments
 
-### LaFTer
+### NoLA
 To run the full `NoLA` pipeline, please run the following command:
 
 ```
