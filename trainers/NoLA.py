@@ -15,6 +15,7 @@ from utils.utils import *
 from functools import reduce
 from operator import mul
 from utils.data_utils import ds_specific_templates
+import wandb
 
 def load_clip_to_cpu(backbone_name):
     url = clip._MODELS[backbone_name]
@@ -255,6 +256,23 @@ class NoLAUFT(nn.Module):
 @TRAINER_REGISTRY.register()
 class NoLA(TrainerX):
 
+    def inti_writer(self, log_dir):
+        if self.__dict__.get("_writer") is None or self._writer is None:
+            wandb.init(project='NoLA', entity='dassl', config=self.cfg, dir=log_dir, name=self.cfg.DATASET.NAME)
+            self._writer = wandb
+
+    def write_scalar(self, tag, scalar_value, global_step=None):
+        if self._writer is None:
+            # Do nothing if writer is not initialized
+            # Note that writer is only used when training is needed
+            pass
+        else:
+            self._writer.log({tag: scalar_value}, step=global_step)
+    
+    def close_writer(self):
+        if self._writer is not None:
+            self._writer.finish()   
+
     def check_cfg(self, cfg):
         assert cfg.TRAINER.COOP.PREC in ["fp16", "fp32", "amp"]
 
@@ -436,7 +454,6 @@ class NoLA(TrainerX):
             if 'visual' in k and ('ln' in k or 'bn' in k):
                 v.requires_grad = True
 
-
     def forward_backward(self, batch_x):
 
         input_x, label_x = self.parse_batch_train(batch_x)
@@ -458,7 +475,6 @@ class NoLA(TrainerX):
         }
         return loss_summary
 
-    
     def select_top_k(self, k):
         # if file exists, load the embeddings
         if os.path.isfile(f'embeddings/{self.cfg.DATASET.NAME}_total_emb.pt'):
@@ -591,7 +607,6 @@ class NoLA(TrainerX):
 
         if meet_checkpoint_freq or last_epoch:
             self.save_model(self.epoch, self.output_dir)
-
 
     def model_inference(self, input):
         outputs = self.model.eval_clip(input)
