@@ -256,9 +256,9 @@ class NoLAUFT(nn.Module):
 @TRAINER_REGISTRY.register()
 class NoLA(TrainerX):
 
-    def inti_writer(self, log_dir):
+    def init_writer(self, log_dir):
         if self.__dict__.get("_writer") is None or self._writer is None:
-            wandb.init(project='NoLA', entity='dassl', config=self.cfg, dir=log_dir, name=self.cfg.DATASET.NAME)
+            wandb.init(project='NOLA', config=self.cfg, dir=log_dir, name=self.cfg.DATASET.NAME)
             self._writer = wandb
 
     def write_scalar(self, tag, scalar_value, global_step=None):
@@ -267,7 +267,7 @@ class NoLA(TrainerX):
             # Note that writer is only used when training is needed
             pass
         else:
-            self._writer.log({tag: scalar_value}, step=global_step)
+            self._writer.log({tag: scalar_value})
     
     def close_writer(self):
         if self._writer is not None:
@@ -556,7 +556,7 @@ class NoLA(TrainerX):
                 loss.backward()
                 optimizer.step()
                 if self._writer:
-                    self._writer.add_scalar("train/loss_taal", loss.item(), epoch * len(train_loader) + i)
+                    self._writer.log({"train/loss_taal": loss.item()})
                 # if i % 50 == 0:
                 #     print(f"Epoch: {epoch}, Batch: {i}, Loss: {loss.item()}")
             print(f"Epoch: {epoch}, Time: {epoch_time}")
@@ -574,7 +574,7 @@ class NoLA(TrainerX):
                 total += label.size(0)
                 correct += (predicted == label).sum().item()
         if self._writer:
-            self._writer.add_scalar("test/accuracy_taal", 100 * correct / total, 0)
+            self._writer.log({"test/accuracy_taal": 100 * correct / total})
         print(f'Accuracy of the network on the {total} test images: {100 * correct / total}')
     
     def after_epoch(self):
