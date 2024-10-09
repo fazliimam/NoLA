@@ -7,8 +7,7 @@ This framework effectively combines the strengths of visual and textual foundati
 
 ## Installation
 
-Our code is built upon the official codebase of the [CoOp](https://github.dev/KaiyangZhou/CoOp) paper and has been 
-tested in an environment with `python 3.8.8` and `pytorch 13.1.1` compiled with `CUDA 11.1`. 
+Our code has been tested in an environment with `python 3.8.8` and `pytorch 2.3.1` compiled with `CUDA 12.1`. 
 
 As a first step, install `dassl` library (under `NoLA/`) in your environment by following the instructions [here](https://github.com/KaiyangZhou/Dassl.pytorch#installation).
 
@@ -45,15 +44,7 @@ bash scripts/nola_train.sh <dataset_name>
 
 where `<dataset_name>` can be `dtd`, `eurosat`, etc.
 
-<!--
-#### To cite us: 
-```bibtex
-@InProceedings{mirza2023lafter,
-    author    = {Mirza, M. Jehanzeb and Karlinsky, Leonid and Lin, Wei and Kozinski, Mateusz and 
-                 Possegger, Horst and Feris, Rogerio and Bischof, Horst},
-    title     = {LaFTer: Label-Free Tuning of Zero-shot Classifier using Language and Unlabeled Image Collections},
-    booktitle = {Conference on Neural Information Processing Systems (NeurIPS)},
-    year      = {2023}
-}
-```
--->
+## Acknowledgements 
+Our code is based on [LaFTer](https://github.com/jmiemirza/LaFTer) and [Dassl](https://github.com/KaiyangZhou/Dassl.pytorch). We thank the authors for releasing their code.
+
+

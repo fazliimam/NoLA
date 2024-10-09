@@ -51,7 +51,7 @@ def main(cfg):
 
     print_args(args, cfg)
     setup_seed(cfg.SEED)
-    cfg.OUTPUT_DIR = f'Output_dassl_fixed_imagenet/{cfg.DATASET.NAME}'
+    cfg.OUTPUT_DIR = f'Output_saved_chkpts_512/{cfg.DATASET.NAME}'
 
     if not os.path.exists(cfg.OUTPUT_DIR):
         os.makedirs(cfg.OUTPUT_DIR)
@@ -63,6 +63,9 @@ def main(cfg):
     
     trainer = build_trainer(cfg)
     trainer.train()
+
+    # Testing with the best model
+    trainer.load_model(cfg.OUTPUT_DIR)
     trainer.test()
 
 

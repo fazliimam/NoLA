@@ -258,7 +258,7 @@ class NoLA(TrainerX):
 
     def init_writer(self, log_dir):
         if self.__dict__.get("_writer") is None or self._writer is None:
-            wandb.init(project='NOLA', config=self.cfg, dir=log_dir, name=self.cfg.DATASET.NAME)
+            wandb.init(project='NOLA', config=self.cfg, dir=log_dir, name=self.cfg.DATASET.NAME, settings=wandb.Settings(silent="true"))
             self._writer = wandb
 
     def write_scalar(self, tag, scalar_value, global_step=None):
@@ -320,7 +320,7 @@ class NoLA(TrainerX):
     
     def build_model(self):
         cfg = self.cfg
-        self.patience = 15
+        self.patience = 22
         classnames = self.dm.dataset.classnames
         dset = cfg.DATASET.NAME
         print("Dataset: ", dset)
