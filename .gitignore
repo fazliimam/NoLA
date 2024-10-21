@@ -30,3 +30,4 @@ model_utils.py
 train.py
 nol*.yml
 utils/*
+new_outputs/*
