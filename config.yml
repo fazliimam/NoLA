@@ -17,3 +17,7 @@ DATALOADER:
 TEST:
   FINAL_MODEL: best_val
   EVALUATOR: Classification
+
+MODEL:
+  BACKBONE:
+    NAME: "ViT-B/32"
