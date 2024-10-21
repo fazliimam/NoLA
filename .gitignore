@@ -24,3 +24,9 @@ dockerfile
 ReadME.md
 zeroshot*
 installation.txt
+embeddings_*/*
+saved_*/*
+model_utils.py
+train.py
+nol*.yml
+utils/*
