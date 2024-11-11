@@ -19,8 +19,8 @@ class OxfordPets(DatasetBase):
         self.image_dir = os.path.join(self.dataset_dir, "images")
         self.anno_dir = os.path.join(self.dataset_dir, "annotations")
         self.split_path = os.path.join(self.dataset_dir, "split_zhou_OxfordPets.json")
-        self.split_fewshot_dir = os.path.join(self.dataset_dir, "split_fewshot")
-        mkdir_if_missing(self.split_fewshot_dir)
+        # self.split_fewshot_dir = os.path.join(self.dataset_dir, "split_fewshot")
+        # mkdir_if_missing(self.split_fewshot_dir)
 
         if os.path.exists(self.split_path):
             train, val, test = self.read_split(self.split_path, self.image_dir)

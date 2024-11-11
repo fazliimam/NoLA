@@ -24,6 +24,8 @@ def extend_cfg(cfg):
     cfg.NUM_TOKENS = 16 # number of  learnable tokens
     cfg.TAAL_EPOCHS = 50
 
+    cfg.TAAL_ENCODER = 'dino'
+
 def setup_cfg(args):
     
     cfg = get_cfg_default()

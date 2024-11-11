@@ -16,6 +16,8 @@ from functools import reduce
 from operator import mul
 from utils.data_utils import ds_specific_templates
 import wandb
+import timm
+
 
 def load_clip_to_cpu(backbone_name):
     url = clip._MODELS[backbone_name]
@@ -30,7 +32,6 @@ def load_clip_to_cpu(backbone_name):
 
     model = clip.build_model(state_dict or model.state_dict())
     return model
-
 
 class TopKDataset(Dataset):
     def __init__(self, data, transform, top_k_idxs, top_k_conf, top_k_pseudo):
@@ -64,7 +65,6 @@ class TopKDataset(Dataset):
         
         return output
     
-
 class DictDataset(Dataset):
     def __init__(self, data_dict, transform=None):
 
@@ -80,14 +80,147 @@ class DictDataset(Dataset):
         return sample
     
 class Taal(nn.Module):
-    def __init__(self, num_classes, templates, device='cuda'):
+    def __init__(self, num_classes, encoder='dino'):
         super(Taal, self).__init__()
 
-        self.taal_enc =  torch.hub.load('facebookresearch/dino:main', 'dino_vitb16')
-        self.taal_enc.head = nn.Identity()
+        if encoder == 'dino':
+            self.taal_enc =  torch.hub.load('facebookresearch/dino:main', 'dino_vitb16')
+            in_features = self.taal_enc.head.in_features
+            self.taal_enc.head = nn.Identity()
+
+        elif encoder == 'mae':
+            # from .mae import vit_base_patch16
+            # self.taal_enc = vit_base_patch16()
+            self.taal_enc = timm.create_model("hf_hub:timm/vit_base_patch16_224.mae", pretrained=True)
+            in_features = self.taal_enc.head.in_features
+            self.taal_enc.head = nn.Identity()
+            # load pretrained weights
+            # self.taal_enc.load_state_dict(torch.load('all_weights/mae_pretrain_vit_base.pth')['model'], strict=True)
+
+        elif encoder == 'beit':
+            self.taal_enc = timm.create_model('hf_hub:timm/beit_base_patch16_224.in22k_ft_in22k_in1k', pretrained=True)
+            in_features = self.taal_enc.head.in_features
+            self.taal_enc.head = nn.Identity()
+     
+        else:
+            raise ValueError('Encoder not supported')
+
         self.taal_enc.eval()
-        in_features = self.taal_enc.cls_token.shape[-1]
+        # in_features = self.taal_enc.cls_token.shape[-1]
         self.taal_h_module = AdapterMLP(num_classes=num_classes, input_size=in_features, hidden_size=256)
+
+    def load_encoder(self, chk_path):
+    
+        checkpoint = torch.load(chk_path, map_location='cpu')
+
+        print("Load ckpt from %s" % chk_path)
+
+        checkpoint_model = checkpoint['model']
+        if checkpoint_model is None:
+            checkpoint_model = checkpoint
+        state_dict = self.taal_enc.state_dict()
+        for k in ['head.weight', 'head.bias']:
+            if k in checkpoint_model and checkpoint_model[k].shape != state_dict[k].shape:
+                print(f"Removing key {k} from pretrained checkpoint")
+                del checkpoint_model[k]
+
+        if "rel_pos_bias.relative_position_bias_table" in checkpoint_model:
+            print("Expand the shared relative position embedding to each transformer block. ")
+            num_layers = self.taal_enc.get_num_layers()
+            rel_pos_bias = checkpoint_model["rel_pos_bias.relative_position_bias_table"]
+            for i in range(num_layers):
+                checkpoint_model["blocks.%d.attn.relative_position_bias_table" % i] = rel_pos_bias.clone()
+
+            checkpoint_model.pop("rel_pos_bias.relative_position_bias_table")
+
+        all_keys = list(checkpoint_model.keys())
+        for key in all_keys:
+            if "relative_position_index" in key:
+                checkpoint_model.pop(key)
+
+            if "relative_position_bias_table" in key:
+                rel_pos_bias = checkpoint_model[key]
+                src_num_pos, num_attn_heads = rel_pos_bias.size()
+                dst_num_pos, _ = self.taal_enc.state_dict()[key].size()
+                dst_patch_shape = self.taal_enc.patch_embed.patch_size
+                if dst_patch_shape[0] != dst_patch_shape[1]:
+                    raise NotImplementedError()
+                num_extra_tokens = dst_num_pos - (dst_patch_shape[0] * 2 - 1) * (dst_patch_shape[1] * 2 - 1)
+                src_size = int((src_num_pos - num_extra_tokens) ** 0.5)
+                dst_size = int((dst_num_pos - num_extra_tokens) ** 0.5)
+                if src_size != dst_size:
+                    print("Position interpolate for %s from %dx%d to %dx%d" % (
+                        key, src_size, src_size, dst_size, dst_size))
+                    extra_tokens = rel_pos_bias[-num_extra_tokens:, :]
+                    rel_pos_bias = rel_pos_bias[:-num_extra_tokens, :]
+
+                    def geometric_progression(a, r, n):
+                        return a * (1.0 - r ** n) / (1.0 - r)
+
+                    left, right = 1.01, 1.5
+                    while right - left > 1e-6:
+                        q = (left + right) / 2.0
+                        gp = geometric_progression(1, q, src_size // 2)
+                        if gp > dst_size // 2:
+                            right = q
+                        else:
+                            left = q
+
+                    dis = []
+                    cur = 1
+                    for i in range(src_size // 2):
+                        dis.append(cur)
+                        cur += q ** (i + 1)
+
+                    r_ids = [-_ for _ in reversed(dis)]
+
+                    x = r_ids + [0] + dis
+                    y = r_ids + [0] + dis
+
+                    t = dst_size // 2.0
+                    dx = np.arange(-t, t + 0.1, 1.0)
+                    dy = np.arange(-t, t + 0.1, 1.0)
+
+                    print("Original positions = %s" % str(x))
+                    print("Target positions = %s" % str(dx))
+
+                    all_rel_pos_bias = []
+
+                    for i in range(num_attn_heads):
+                        z = rel_pos_bias[:, i].view(src_size, src_size).float().numpy()
+                        f = interpolate.interp2d(x, y, z, kind='cubic')
+                        all_rel_pos_bias.append(
+                            torch.Tensor(f(dx, dy)).contiguous().view(-1, 1).to(rel_pos_bias.device))
+
+                    rel_pos_bias = torch.cat(all_rel_pos_bias, dim=-1)
+
+                    new_rel_pos_bias = torch.cat((rel_pos_bias, extra_tokens), dim=0)
+                    checkpoint_model[key] = new_rel_pos_bias
+
+        # interpolate position embedding
+        if 'pos_embed' in checkpoint_model:
+            pos_embed_checkpoint = checkpoint_model['pos_embed']
+            embedding_size = pos_embed_checkpoint.shape[-1]
+            num_patches = self.taal_enc.patch_embed.num_patches
+            num_extra_tokens = self.taal_enc.pos_embed.shape[-2] - num_patches
+            # height (== width) for the checkpoint position embedding
+            orig_size = int((pos_embed_checkpoint.shape[-2] - num_extra_tokens) ** 0.5)
+            # height (== width) for the new position embedding
+            new_size = int(num_patches ** 0.5)
+            # class_token and dist_token are kept unchanged
+            if orig_size != new_size:
+                print("Position interpolate from %dx%d to %dx%d" % (orig_size, orig_size, new_size, new_size))
+                extra_tokens = pos_embed_checkpoint[:, :num_extra_tokens]
+                # only the position tokens are interpolated
+                pos_tokens = pos_embed_checkpoint[:, num_extra_tokens:]
+                pos_tokens = pos_tokens.reshape(-1, orig_size, orig_size, embedding_size).permute(0, 3, 1, 2)
+                pos_tokens = torch.nn.functional.interpolate(
+                    pos_tokens, size=(new_size, new_size), mode='bicubic', align_corners=False)
+                pos_tokens = pos_tokens.permute(0, 2, 3, 1).flatten(1, 2)
+                new_pos_embed = torch.cat((extra_tokens, pos_tokens), dim=1)
+                checkpoint_model['pos_embed'] = new_pos_embed
+            
+        self.taal_enc.load_state_dict(checkpoint_model, strict=False)
 
     def forward(self, x):
         with torch.no_grad():
@@ -133,7 +266,7 @@ class NoLAUFT(nn.Module):
         
         self.prompt_dropout = Dropout(0.0)
         self.clip_model = clip_model.to(cfg.DEVICE)
-        self.taal = Taal(num_classes=len(classes), templates=templates, device=cfg.DEVICE)
+        self.taal = Taal(num_classes=len(classes), encoder=cfg.TAAL_ENCODER)
 
         self.cde_adapter = nn.Sequential(nn.Linear(int(self.backbone_out_size), len(classes), bias=False))
 
@@ -435,7 +568,6 @@ class NoLA(TrainerX):
 
         # train taal using top_k dataset
         train_loader = DataLoader(top_k_dataset, batch_size=32, shuffle=True, num_workers=4)
-
         self.train_taal(train_loader)
         self.test_taal()    
 
@@ -559,10 +691,14 @@ class NoLA(TrainerX):
                     self._writer.log({"train/loss_taal": loss.item()})
                 # if i % 50 == 0:
                 #     print(f"Epoch: {epoch}, Batch: {i}, Loss: {loss.item()}")
-            print(f"Epoch: {epoch}, Time: {epoch_time}")
+            # print(f"Epoch: {epoch}, Time: {epoch_time}")
         # print(f"Time taken to train TAAL: {time.time()-st}")        
 
     def test_taal(self):
+        # if self.cfg.TAAL_ENCODER == 'beit':
+        #     data_config = timm.data.resolve_model_data_config(self.model.taal.taal_enc)
+        #     transforms = timm.data.create_transform(**data_config, is_training=False)
+
         correct = 0
         total = 0
         self.model.taal.eval()

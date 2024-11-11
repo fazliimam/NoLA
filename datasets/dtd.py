@@ -18,8 +18,8 @@ class DescribableTextures(DatasetBase):
         self.dataset_dir = os.path.join(root, self.dataset_dir)
         self.image_dir = os.path.join(self.dataset_dir, "images")
         self.split_path = os.path.join(self.dataset_dir, "split_zhou_DescribableTextures.json")
-        self.split_fewshot_dir = os.path.join(self.dataset_dir, "split_fewshot")
-        mkdir_if_missing(self.split_fewshot_dir)
+        # self.split_fewshot_dir = os.path.join(self.dataset_dir, "split_fewshot")
+        # mkdir_if_missing(self.split_fewshot_dir)
 
         if os.path.exists(self.split_path):
             train, val, test = OxfordPets.read_split(self.split_path, self.image_dir)

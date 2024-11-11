@@ -21,3 +21,5 @@ TEST:
 MODEL:
   BACKBONE:
     NAME: "ViT-B/32"
+
+TAAL_ENCODER: "beit"
