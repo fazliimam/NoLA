@@ -45,7 +45,7 @@ bash scripts/nola_train.sh <dataset_name>
 where `<dataset_name>` can be `dtd`, `eurosat`, etc.
 
 ### Trained Checkpoints
-Trained checkpoints for all the datasets can be found [here](https://drive.google.com/drive/u/0/folders/10yOUdRAlf_22G65YyLUSehA9rFcwlC5-).
+Trained checkpoints for all the datasets can be found [here](https://mbzuaiac-my.sharepoint.com/:f:/g/personal/mohamed_imam_mbzuai_ac_ae/EkGSn1Ato_dGj9DFDz2cIjMBbzngkBhr9Cq03A9MKw-C3A?e=ceScao).
 
 ## Acknowledgements 
 Our code is based on [LaFTer](https://github.com/jmiemirza/LaFTer) and [Dassl](https://github.com/KaiyangZhou/Dassl.pytorch). We thank the authors for releasing their code.
