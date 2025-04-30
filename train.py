@@ -51,7 +51,7 @@ def main(cfg):
 
     print_args(args, cfg)
     setup_seed(cfg.SEED)
-    cfg.OUTPUT_DIR = f'Output/{cfg.DATASET.NAME}'
+    cfg.OUTPUT_DIR = f'Output/{cfg.DATASET.NAME}/{cfg.TAAL_ENCODER}'
 
     if not os.path.exists(cfg.OUTPUT_DIR):
         os.makedirs(cfg.OUTPUT_DIR)
