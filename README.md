@@ -1,4 +1,4 @@
-# NoLA: CLIP meets DINO for Tuning Zero-Shot Classifier using Unlabeled Image Collections
+# CLIP meets DINO for Tuning Zero-Shot Classifier using Unlabeled Image Collections
 
 **Accepted at BMVC 2025** | [📄 Paper](https://bmvc2025.bmva.org/proceedings/281/)
 
