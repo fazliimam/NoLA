@@ -64,17 +64,17 @@ class RESISC45(DatasetBase):
     def __init__(self, cfg):
         root = os.path.abspath(os.path.expanduser(cfg.DATASET.ROOT))
         self.dataset_dir = os.path.join(root, self.dataset_dir)
-        self.image_dir = os.path.join(self.dataset_dir, "NWPU-RESISC45")
+        # self.image_dir = os.path.join(self.dataset_dir, "NWPU-RESISC45")
         self.split_path = os.path.join(self.dataset_dir, "split_resisc45.json")
-        self.split_fewshot_dir = os.path.join(self.dataset_dir, "split_fewshot")
-        mkdir_if_missing(self.split_fewshot_dir)
+        # self.split_fewshot_dir = os.path.join(self.dataset_dir, "split_fewshot")
+        # mkdir_if_missing(self.split_fewshot_dir)
 
         if os.path.exists(self.split_path):
-            train_, val_,  test_ = OxfordPets.read_split(self.split_path, self.image_dir)
+            train_, val_,  test_ = OxfordPets.read_split(self.split_path, self.dataset_dir)
             val_ = test_
         else:
-            train_, val_, test_ = DTD.read_and_split_data(self.image_dir, new_cnames=NEW_CNAMES)
-            OxfordPets.save_split(train_, val_, test_, self.split_path, self.image_dir)
+            train_, val_, test_ = DTD.read_and_split_data(self.dataset_dir, new_cnames=NEW_CNAMES)
+            OxfordPets.save_split(train_, val_, test_, self.split_path, self.dataset_dir)
 
         num_shots = cfg.DATASET.NUM_SHOTS
         if num_shots >= 1:

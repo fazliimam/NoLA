@@ -33,8 +33,8 @@ class CIFAR10_local(DatasetBase):
         self.dataset_dir = osp.join(root, self.dataset_dir_)
         train_dir = osp.join(self.dataset_dir, 'train')
         test_dir = osp.join(self.dataset_dir, 'test')
-        self.split_fewshot_dir = os.path.join(self.dataset_dir, "split_fewshot")
-        mkdir_if_missing(self.split_fewshot_dir)
+        # self.split_fewshot_dir = os.path.join(self.dataset_dir, "split_fewshot")
+        # mkdir_if_missing(self.split_fewshot_dir)
 
         # cfg.DATASET.NUM_LABELED = 50000
         # assert cfg.DATASET.NUM_LABELED > 0
